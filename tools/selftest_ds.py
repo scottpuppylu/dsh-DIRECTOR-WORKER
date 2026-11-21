@@ -167,6 +167,15 @@ Runs, on this machine and offline:
               docs/07 rules, docs/06b process hygiene, the pre-commit conflict-marker hook (pygrep, local)
   lessons_intake_250 2.5.0-ds.6 (N9): docs/10 lessons 82-126 (收件匣 L-0xx, each with a rule), numbered without
               gaps, not in the AGENTS section
+  ruler_check_260 2.6.0-ds.6 (upstream N1, N5): ruler_check.py ZERO_MATCH, TOO_FEW, RULER_MISSES_REAL_LINE, a glob
+              of the wrong extension (names the others), TRUNCATED without / with the required rows, NOT_RUN
+  run_plan_check_260 2.6.0-ds.6 (N2): run_plan_check.py NO_CODE_REF, NOT_IN_BUILD, NO_LAUNCH_LINE, PLAN_MISMATCH,
+              --a=v equals --a v, NOT_VERIFIED_IN_BUILD without a repo
+  pre_tr_inputs_260 / pack_unique_260 / waiver_bulk_260 2.6.0-ds.6 (N3, N4, N6): pre_tr inputs (MISSING_INPUT,
+              INPUT_CHANGED, inputs_bad=), pack_check DUPLICATE / unique= / required_segments, waiver several lanes
+              and --to
+  docs_260      2.6.0-ds.6: docs/07, 04, 06b rules and the TEST_REQUEST CODE_REFS line
+  lessons_intake_260 2.6.0-ds.6: docs/10 lessons 127-134 (收件匣 L-079..L-086), numbered without gaps
 (2.2.5-ds.5 drops upstream 2.2.5's browser_check.py use_work_temp check: DS has no browser_check.py.)
 (2.2.5-ds.5 B1 removed the OpenSpec-only tests: sdd_spec_ok, sdd_no_spec_change, sdd_validate_fails, sdd_no_cli,
 sdd_real_openspec, sdd_cli_lookup, sdd_cli_setup, sdd_which_off_224. The safety gates of sdd_tests_locked,
@@ -4158,8 +4167,8 @@ def pre_tr_230(tmp):
                 "--dry-run", says="~ no CPU check by design")
     check230("pre_tr: the real main blocks a class without a check",
              call_main(load_tool(s), "--config", conf, "--changed", "src/ui/hud.py")[0] == 1)
-    module = mutated(s, [("    blocked = failed or missing or (a.strict and free)\n",
-                          "    blocked = failed or (a.strict and free)\n")])
+    module = mutated(s, [("    blocked = failed or missing or bad_inputs or (a.strict and free)\n",
+                          "    blocked = failed or bad_inputs or (a.strict and free)\n")])
     killed("pre_tr missing check blocks", call_main(module, "--config", conf, "--changed", "src/ui/hud.py")[0] == 0)
     return done230(start, 1)
 
@@ -6041,6 +6050,191 @@ def lessons_intake_250(tmp):
     section = (root / "templates" / "AGENTS_PROJECT_SECTION.md").read_text(encoding="utf-8")
     check230("the AGENTS section does not load docs/10", "10_lessons" not in section and "docs/10" not in section)
     return "%d lessons, %d intake tags" % (len(numbers), len(wanted))
+
+
+# ---------------------------------------------------------------- 2.6.0-ds.6 (upstream DW 2.6.0)
+
+@test
+def ruler_check_260(tmp):
+    """2.6.0-ds.6 (upstream 2.6.0 N1, N5): ruler_check.py: zero matches, too few matches, a real line the ruler misses,
+    files of another extension than the glob and a truncated trace without the required rows are INVALID (exit 1),
+    never FAIL; a truncated trace whose required rows are present is a WARN; good input is OK; no input is exit 2."""
+    start = CLI_CALLS[0]
+    s = "ruler_check"
+    d = tmp / "ruler_260"
+    real = "[GATE] hint pitch 1: cam=Main Camera overlap batter=1x1"
+    log = write(d / "run.log", real + "\n" + real.replace("1:", "2:") + "\n")
+    expect_tool("ruler: a pattern that stops at a space misses the real line", s, 1, "lines", "--input", log,
+                "--pattern", r"cam=(\S+) overlap", "--real-line", real,
+                says=["INVALID ZERO_MATCH", "INVALID RULER_MISSES_REAL_LINE", "RULER: INVALID matches=0"], lacks="FAIL")
+    expect_tool("ruler: the fixed pattern is OK", s, 0, "lines", "--input", log, "--pattern", r"cam=(.+?) overlap",
+                "--real-line", real, "--expect-min", "2", says="RULER: OK matches=2 files=1 problems=0")
+    expect_tool("ruler: too few matches", s, 1, "lines", "--input", log, "--pattern", "hint pitch", "--expect-min", "3",
+                says="INVALID TOO_FEW 2 < 3")
+    caps = d / "caps"
+    write(caps / "a.jpg", "x")
+    write(caps / "b.jpg", "y")
+    expect_tool("ruler: a png count over jpg captures is INVALID and names the jpg files", s, 1, "files", "--input",
+                caps, "--glob", "*.png", says=["ZERO_MATCH for *.png", "other files present: .jpg=2"])
+    expect_tool("ruler: the right glob is OK", s, 0, "files", "--input", caps, "--glob", "*.jpg",
+                says="RULER: OK matches=2")
+    trace = write(d / "trace" / "t.csv", "frame,event\n1,arrive\n2,arrive\n# skippedOverCap=1249\n")
+    expect_tool("ruler: a truncated trace is INVALID", s, 1, "lines", "--input", trace, "--pattern", "arrive",
+                "--cap-key", "skippedOverCap", says="INVALID TRUNCATED skippedOverCap=1249, no --required rows given")
+    expect_tool("ruler: truncated but the required rows present is a WARN", s, 0, "lines", "--input", trace,
+                "--pattern", "arrive", "--cap-key", "skippedOverCap", "--required", ",arrive", "--required-min", "2",
+                says=["~ WARN TRUNCATED skippedOverCap=1249", "RULER: OK"])
+    expect_tool("ruler: truncated and required rows missing", s, 1, "lines", "--input", trace, "--pattern", "arrive",
+                "--cap-key", "skippedOverCap", "--required", ",arrive", "--required-min", "3",
+                says="required rows 2 < 3")
+    expect_tool("ruler: a missing input is exit 2", s, 2, "lines", "--input", d / "none.log", "--pattern", "x",
+                says="RULER: NOT_RUN")
+    return done230(start, 0)
+
+
+@test
+def run_plan_check_260(tmp):
+    """2.6.0-ds.6 (upstream 2.6.0 N2): run_plan_check.py: a planned switch or output with no code reference, a
+    reference not in the built commit, a log without a launch line and a planned argument missing from the launch line
+    all STOP; `--a=v` and `--a v` are the same argument; a plan that matches passes."""
+    if shutil.which("git") is None:
+        raise Skip("git is not on PATH")
+    start = CLI_CALLS[0]
+    s = "run_plan_check"
+    d = tmp / "run_plan_260"
+    repo = git_repo(d / "repo", {"src/Mode.cs": "\n".join("line %d" % i for i in range(1, 51)) + "\n"})
+    proc = run_prog(["git", "rev-parse", "HEAD"], cwd=repo)
+    commit = proc.stdout.strip()
+    plan = {"schema": "run-plan-v1", "runs": {"r1": {"args": ["--mode=on", "--bounds 1"],
+                                                     "code": {"--mode": "src/Mode.cs:42",
+                                                              "--bounds": "src/Mode.cs:10"},
+                                                     "outputs": [{"name": "side", "code": "src/Mode.cs:20"}]}}}
+    good = write(d / "plan.json", json.dumps(plan))
+    ok_log = write(d / "ok.log", "boot\nCommand line: game.exe --bounds=1 --mode on --x\n")
+    expect_tool("run_plan: a matching plan and launch line pass", s, 0, "--plan", good, "--repo", repo,
+                "--commit", commit, "--log", "r1=%s" % ok_log, says=["LAUNCH r1:", "RUN_PLAN: OK runs=1 problems=0"])
+    bad_log = write(d / "bad.log", "Command line: game.exe --mode=on\n")
+    expect_tool("run_plan: a planned argument missing from the launch line", s, 1, "--plan", good,
+                "--log", "r1=%s" % bad_log,
+                says=["~ WARN NOT_VERIFIED_IN_BUILD", "PLAN_MISMATCH r1: --bounds 1 not in the launch line"])
+    none_log = write(d / "none.log", "boot only\n")
+    expect_tool("run_plan: no launch line", s, 1, "--plan", good, "--log", "r1=%s" % none_log, says="NO_LAUNCH_LINE r1")
+    plan["runs"]["r1"]["outputs"] = [{"name": "face close-up", "code": "src/EditorOnly.cs:5"}, {"name": "top"}]
+    plan["runs"]["r1"]["code"]["--mode"] = "src/Mode.cs:99"
+    bad = write(d / "bad.json", json.dumps(plan))
+    expect_tool("run_plan: references not in the build and a missing reference stop", s, 1, "--plan", bad,
+                "--repo", repo, "--commit", commit,
+                says=["NOT_IN_BUILD r1 --mode src/Mode.cs:99", "NOT_IN_BUILD r1 output face close-up",
+                      "NO_CODE_REF r1 output top"])
+    expect_tool("run_plan: not a plan is exit 2", s, 2, "--plan", ok_log, says="RUN_PLAN: NOT_RUN")
+    return done230(start, 0)
+
+
+@test
+def pre_tr_inputs_260(tmp):
+    """2.6.0-ds.6 (upstream 2.6.0 N3): pre_tr.py checks the config's non-tracked "inputs" first: a missing file or a
+    changed SHA-256 blocks with the file's source; present files with the right hash pass."""
+    start = CLI_CALLS[0]
+    d = tmp / "pre_tr_260"
+    repo = d / "repo"
+    (repo / "Library").mkdir(parents=True, exist_ok=True)
+    (repo / "Library" / "build-info.json").write_bytes(b"{}")
+    digest = hashlib.sha256(b"{}").hexdigest()
+    cfg = {"schema": "pre-tr-v1",
+           "inputs": [{"path": "Library/build-info.json", "sha256": digest, "source": "copy"}],
+           "classes": {"docs": {"paths": ["*.md"], "checks": [], "why": "text only"}}}
+    good = write(d / "good.json", json.dumps(cfg))
+    expect_tool("pre_tr: present inputs pass", "pre_tr", 0, "--config", good, "--changed", "a.md", "--repo", repo,
+                says=["INPUT OK Library/build-info.json", "PRE_TR: PASS", "inputs_bad=0"])
+    cfg["inputs"] = [{"path": "Assets/Untracked.cs", "source": "the old worktree's file, see notes"},
+                     {"path": "Library/build-info.json", "sha256": "0" * 64}]
+    bad = write(d / "bad.json", json.dumps(cfg))
+    expect_tool("pre_tr: a missing or changed input blocks", "pre_tr", 1, "--config", bad, "--changed", "a.md",
+                "--repo", repo, says=["MISSING_INPUT Assets/Untracked.cs (source: the old worktree", "INPUT_CHANGED",
+                                      "PRE_TR: BLOCK", "inputs_bad=2"])
+    return done230(start, 0)
+
+
+@test
+def pack_unique_260(tmp):
+    """2.6.0-ds.6 (upstream 2.6.0 N4): pack_check.py counts distinct contents: duplicates are listed and count once,
+    and a required segment with no distinct image fails as INVALID."""
+    start = CLI_CALLS[0]
+    pack = tmp / "pack_260"
+    _png_230(pack / "img" / "s_0001.png", 1000, 800)
+    (pack / "img" / "s_0002.png").write_bytes((pack / "img" / "s_0001.png").read_bytes())
+    _png_230(pack / "img" / "s_0010.png", 1000, 801)
+    imgs = [{"file": "img/s_%04d.png" % f, "camera": "cam", "frame": f, "subject_bbox": [0, 0, 10, 10]}
+            for f in (1, 2, 10)]
+    data = {"schema": "review-pack-v1", "sampled_frames": [1, 2, 10], "min_phase_frames": 40, "images": imgs,
+            "required_segments": {"late": [9, 10, 11]},
+            "render": {"motion_blur": False, "resolution_percent": 100, "file_format": "PNG", "view": "Standard"}}
+    write(pack / "manifest.json", json.dumps(data))
+    expect_tool("pack_check: readme for the unique pack", "pack_check", 0, "readme", pack, says="README written")
+    expect_tool("pack_check: duplicates count once", "pack_check", 0, "check", pack,
+                says=["~ DUPLICATE img/s_0002.png == img/s_0001.png", "unique=2"])
+    data["required_segments"]["early"] = [1, 2]
+    write(pack / "manifest.json", json.dumps(data))
+    expect_tool("pack_check: a segment shown only by one repeated image is INVALID", "pack_check", 1, "check", pack,
+                says="coverage: segment early has no distinct image (frames 1-2): INVALID")
+    return done230(start, 0)
+
+
+@test
+def waiver_bulk_260(tmp):
+    """2.6.0-ds.6 (upstream 2.6.0 N6): waiver.py snooze takes several lanes and --to a local time; check shows a later
+    day's date; --to in the past and --to with --minutes are refused; lift takes several lanes."""
+    start = CLI_CALLS[0]
+    f = tmp / "waiver_260" / "w.json"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    expect_tool("waiver: several lanes until the reset in one call", "waiver", 0, "snooze", "--file", f, "--lane",
+                "lane a", "lane b", "--until", "weekly reset", "--to", "2099-01-02T00:00",
+                says=["SNOOZE lane a until: weekly reset", "SNOOZE lane b until: weekly reset"])
+    expect_tool("waiver: check shows the date of a later day", "waiver", 0, "check", "--file", f,
+                says=["SNOOZED lane a until: weekly reset till 2099-01-02 00:00", "WAIVERS: lanes=2 wake=0"])
+    expect_tool("waiver: --to in the past is refused", "waiver", 2, "snooze", "--file", f, "--lane", "c",
+                "--until", "x", "--to", "2000-01-01T00:00", says="not in the future")
+    expect_tool("waiver: --to and --minutes together are refused", "waiver", 2, "snooze", "--file", f, "--lane", "c",
+                "--until", "x", "--to", "2099-01-01T00:00", "--minutes", "5", says="not both")
+    expect_tool("waiver: lift several lanes", "waiver", 0, "lift", "--file", f, "--lane", "lane a", "lane b",
+                says=["LIFT lane a", "LIFT lane b"])
+    return done230(start, 0)
+
+
+@test
+def docs_260(tmp):
+    """2.6.0-ds.6: the upstream 2.6.0 rules are in docs/07 (ruler, plan vs code, simulation clock, unique coverage),
+    docs/04 (numeric go conditions, all waivers at wrap-up, in the dshdw stop-line section), docs/06b (non-tracked
+    inputs, DSH's own process tree) and the TEST_REQUEST template has CODE_REFS."""
+    root = TOOLS.parent
+    d07 = (root / "docs/07_quality_gates.md").read_text(encoding="utf-8")
+    for words in ("量尺先證明看得到（2.6.0-ds.6", "計畫要對到程式碼", "表現層用模擬時鐘", "涵蓋數用獨特內容算",
+                  "ruler_check.py", "run_plan_check.py", "required_segments"):
+        check230("docs/07 has %s" % words, words in d07)
+    d04 = (root / "docs/04_quota_efficiency.md").read_text(encoding="utf-8")
+    stop = d04[d04.index("## 停工線與用量重置（dshdw）"):]
+    check230("docs/04 numeric go conditions in the stop-line section", "放行條件先寫成數字" in stop and "UNKNOWN" in stop)
+    check230("docs/04 all waivers at wrap-up", "waiver.py snooze" in stop and "--to" in stop)
+    d06b = (root / "docs/06b_on_demand_procedures.md").read_text(encoding="utf-8")
+    check230("docs/06b non-tracked inputs", "非版控輸入要有清單" in d06b and "MISSING_INPUT" in d06b
+             and "DSH session 自己起的程序樹" in d06b)
+    tr = (root / "templates/TEST_REQUEST.md").read_text(encoding="utf-8")
+    check230("TEST_REQUEST has CODE_REFS after SWITCHES", tr.index("CODE_REFS:") > tr.index("SWITCHES:"))
+    return "docs/07, 04, 06b and TEST_REQUEST"
+
+
+@test
+def lessons_intake_260(tmp):
+    """2.6.0-ds.6 (upstream 2.6.0): the intake lessons L-079..L-086 each have one numbered docs/10 line with a rule;
+    the list stays numbered without gaps."""
+    text = (TOOLS.parent / "docs/10_lessons_learned.md").read_text(encoding="utf-8")
+    numbers = [int(n) for n in re.findall(r"(?m)^(\d+)\. \*\*", text)]
+    check230("docs/10 lessons are numbered without gaps", numbers == list(range(1, len(numbers) + 1)), numbers[-5:])
+    lines = [line for line in re.split(r"\r\n|\r|\n", text) if re.match(r"^\d+\. \*\*", line)]
+    for n in range(79, 87):
+        hit = [line for line in lines if re.search(r"收件匣 (?:L-\d{3}、)*L-%03d\b" % n, line)]
+        check230("docs/10 has 收件匣 L-%03d with a rule" % n, len(hit) == 1 and "→" in hit[0], hit[:2])
+    return "%d lessons" % len(numbers)
 
 
 def main(argv=None):

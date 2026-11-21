@@ -555,6 +555,32 @@ flowchart TD
     F --> G["對帳：清單和實際刪掉的一致"]
 ```
 
+## 2.6.0-ds.6 新增的小幫手（選用）
+
+讀完這節，你會知道這一版從 Claude 版 2.6.0 搬來哪些小幫手。它們都是你（或總監）**自己執行**的事後檢查：只讀，不裝 hook、不改設定。不跑，用起來和 2.5.0-ds.6 一樣。
+
+| 工具 | 什麼時候用 | 做什麼 |
+|---|---|---|
+| `ruler_check.py` | 判一個計數或 grep 結果之前 | 先確認量尺自己看得到：對到 0 筆、比預期少、對不上從實際輸出複製的一行、紀錄被截斷，都是 INVALID（不算數），不是成品不及格 |
+| `run_plan_check.py` | 送測試之前、跑完之後 | 測試計畫的每個開關和輸出項都要寫程式位置，確認在要跑的版本裡；跑完比對 log 印出的啟動參數，不符的那場不算數 |
+| `pre_tr.py` 的 `inputs` | 新工作樹第一次 build 之前 | 列出不在版控裡、卻是 build 必要的檔；缺了或內容變了就明確停下 |
+| `pack_check.py` 的 `unique=` | 送審查包之前 | 內容一樣的圖只算一張；預先登記的片段沒有獨特的圖就不算數 |
+| `waiver.py snooze --lane A B --to` | 收尾、暫停時 | 一次替好幾條線寫豁免到指定時間，不用一條一條寫 |
+
+### 怎麼用
+
+在總監的資料夾執行，路徑換成你自己的（`<RULES>` 是規則包的位置）：
+
+```text
+python -I -X utf8 <RULES>/tools/ruler_check.py lines --pattern "cam=(.+?) overlap" --input run.log --real-line "<從 log 複製的一行>"
+python -I -X utf8 <RULES>/tools/ruler_check.py files --input captures --glob "*.jpg" --expect-min 1800
+python -I -X utf8 <RULES>/tools/run_plan_check.py --plan PLAN.json --repo <repo> --commit <要跑的 commit>
+python -I -X utf8 <RULES>/tools/waiver.py snooze --file WAIVERS.json --lane A B C --until "恢復" --to 2026-11-27T00:00
+```
+
+- `--real-line` 一定用實際輸出複製的一行，不要自己打一行乾淨的：這次教訓就是手打的樣本對得到，實際的 log 對不到。
+- 豁免的 `--to` 是本地時間，必須在未來；和 `--minutes` 只能選一個。
+
 ## 開始前要準備
 
 | 要準備的 | 為什麼 | 怎麼確認 |

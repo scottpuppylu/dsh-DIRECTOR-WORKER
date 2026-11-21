@@ -3,6 +3,37 @@
 本 repo 是 [DIRECTOR-WORK](https://github.com/scottpuppylu/DIRECTOR-WORK) v2.2.2（Claude Code／Claude Desktop 版，MIT）的移植。
 上游的完整變更歷史保留在 [`CHANGELOG-upstream.md`](CHANGELOG-upstream.md)；本檔只記 dsh-DIRECTOR-WORKER（簡稱 dshdw；舊名 DIRECTOR-WORK DeepSeek 版（DW-DS））自己的變更。
 
+## 2.6.0-ds.6（2026-11-22）
+
+跟上上游 DW 2.6.0（分支 `claude/dw-v260`，本機 commit 787f67b）。上游 2.6.0 的兩個新工具和三個工具的新選項都是自己執行、只讀，不靠 hook，所以五支工具原樣搬（和上游逐位元組相同，換行 LF）。ds 序號不加：這一版沒有新的 DSH 試驗修正。安全閘門全部保留，不加回 OpenSpec／SDD。每輪必讀（指示鏈）沒有變大。上游原文見 `CHANGELOG-upstream.md`。
+
+### 遷移（從 2.5.0-ds.6 升上來要注意的）
+- 不用改任何東西：新工具都要自己執行。舊的 `pre_tr`、`pack_check` 設定和 manifest 照樣通過。
+- 讀最後一行的腳本注意：`pack_check.py` 最後一行結尾多 `unique=n`，`pre_tr.py` 最後一行結尾多 `inputs_bad=n`。
+- `templates/TEST_REQUEST.md` 多一行 `CODE_REFS:`；有照抄這份範本的，要自己再抄一次。
+
+### 上游 2.6.0 各項怎麼處理
+| 上游 | 處理 | dshdw 的檔案 |
+|---|---|---|
+| N1、N5 `ruler_check.py` | 原樣搬 | `tools/ruler_check.py`、`docs/07` |
+| N2 `run_plan_check.py`＋TEST_REQUEST `CODE_REFS:` | 原樣搬 | `tools/run_plan_check.py`、`templates/TEST_REQUEST.md`、`docs/07` |
+| N3 `pre_tr.py` 的 `inputs` | 原樣搬；鎖檔一句改成「只看這個 DSH session 自己起的程序樹」 | `tools/pre_tr.py`、`docs/06b` |
+| N4 `pack_check.py` 的 `unique=`、`required_segments` | 原樣搬 | `tools/pack_check.py`、`docs/07` |
+| N6 `waiver.py` 多線、`--to` | 原樣搬 | `tools/waiver.py`、`docs/04` |
+| docs/04 放行條件數字化、收尾一次寫豁免 | 改寫：dshdw 沒有 98%／99% 停工線，寫進「停工線與用量重置」一節，用量照 DSH 帳號頁，讀不到判 UNKNOWN 不放行 | `docs/04` |
+| docs/07 模擬時鐘 | 原樣搬 | `docs/07` |
+| docs/10 第 127～134 條 | 原樣搬；不放進 agent instructions | `docs/10` |
+| CHANGELOG／VERSION／README | 本段、`VERSION`、README 新節；`CHANGELOG-upstream.md` 補上游 2.6.0 原文 | `CHANGELOG.md`、`CHANGELOG-upstream.md`、`VERSION`、`README.md` |
+
+### 已知限制
+- `ruler_check.py` 只看你給的正規式、glob 和截斷計數鍵；量尺選錯欄位它看不出來，只保證「0 筆、太少、對不上實際的一行、截斷」不會被當成結果。
+- `run_plan_check.py` 只查計畫寫的 `path:line` 在 commit 裡存在、log 有沒有印出計畫的參數；程式位置寫錯行但檔案有那麼多行，它看不出來。
+- 表現層用模擬時鐘（docs/07）是文件規則，沒有工具自動檢查。
+
+### 驗證
+- `selftest_ds.py`：2.5.0-ds.6 是 101 項，這一版 108 項；結果見本版 commit 前的實跑。
+- 五支工具和上游 2.6.0 逐位元組相同（去掉 CR 後比 SHA-256）。
+
 ## 2.5.0-ds.6（2026-11-16）
 
 WO-DS-013。跟上上游 DW 2.5.0（tag v2.5.0，decab48）。上游 2.5.0 的新檢查本來就是自己執行、預設只提醒，不靠 hook，所以多半原樣搬；要改寫的只有讀紀錄的兩項（loops 的時間範圍、最常重讀的檔案），因為 dshdw 讀的是 DSH 的 `session.v4.jsonl.zstd` 事件，不是 Claude 的 transcript。ds 序號不加：這一版沒有新的 DSH 試驗修正。安全閘門全部保留，不加回 OpenSpec／SDD。每輪必讀（指示鏈）沒有變大。上游原文見 `CHANGELOG-upstream.md`。

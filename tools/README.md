@@ -52,7 +52,7 @@ DSH 沒有 hooks、沒有 PO 頁、沒有 Claude 額度查詢；所以**沒有�
 
 ### 上游 DW 2.3.0 移植（2.3.0-ds.5，WO-DS-010）
 
-- 新工具，上游原樣搬：`completion.py`（完成度表）、`sim_check.py`（patch 和模擬讀同一份設定）、`waiver.py`（豁免要有解除事件）、`line_brief.py`（一條工作線的摘要）、`pre_tr.py`（送 TR 前依缺陷類別跑 CPU 檢查）、`pack_check.py`（審查包）、`hash_check.py`（雜湊比對、build 新不新）、`flag_check.py`（開關有沒有真的被讀到）；範本 `templates/CPU_REPRO.md`、`templates/pre_tr.json`、`templates/run_closing.py`。用法見下面「2.3.0 新工具用法」。
+- 新工具，上游原樣搬：`completion.py`（完成度表）、`sim_check.py`（patch 和模擬讀同一份設定）、`waiver.py`（豁免要有解除事件）、`line_brief.py`（一條工作線的摘要）、`pre_tr.py`（送 TR 前依缺陷類別跑 CPU 檢查）、`pack_check.py`（審查包）、`hash_check.py`（雜湊比對、build 新不新）、`flag_check.py`（開關有沒有真的被讀到）；2.6.0-ds.6 再加 `ruler_check.py`、`run_plan_check.py`（上游原樣搬，見下面）；範本 `templates/CPU_REPRO.md`、`templates/pre_tr.json`、`templates/run_closing.py`。用法見下面「2.3.0 新工具用法」。
 - `gate_check.py`：`--feasibility 紀錄…`（開修正組或凍結 gate 數字前的 CPU 可行性搜尋）；`--verdict` 的「自己查證的證據」：PASS 類裁決要有一行 `ran_line.py` 格式的 RAN，嚴重度看設定 `verdict_self_check`（2.3.x 預設 `warn`，`fail` 才判不過）。設定從 `--config` 讀，沒給就找裁決所在資料夾或上一層的 `director_work.json`。
 - `dsh_doctor.py --licenses 清單 [--license-days 3] [--licenses-only]`（上游 `doctor.py --licenses`，DS 沒有 `doctor.py`）：快到期的授權和持有的工具。
 - `dsh_setup_check.py`、`bootstrap_repo.py --config`：認得 `verdict_self_check`（`warn`／`fail`，其他值 setup_check 判問題、bootstrap 印 WARN）。
@@ -293,6 +293,31 @@ python -I -X utf8 flag_check.py --flags 開關.json --log 執行.log [--before "
 ### round_check.py 的條件表（2.3.0）
 
 - 研究檔每一節要有一張「測試條件 vs 參考條件」表（表頭同時寫到 test / 測試 和 reference / 參考 / 基準，至少一列）；沒有印 `~ WARN NO_CONDITIONS_TABLE`（2.3.0 只警告）。
+
+### ruler_check.py（2.6.0-ds.6，上游 2.6.0 N1、N5）
+
+```text
+python -I -X utf8 ruler_check.py lines --pattern "cam=(.+?) overlap" --input run.log --real-line "<從 log 複製的一行>" [--expect-min 34]
+python -I -X utf8 ruler_check.py files --input captures/ --glob "*.jpg" [--expect-min 1800]
+python -I -X utf8 ruler_check.py lines --pattern ",arrive" --input trace.csv --cap-key skippedOverCap --required ",arrive" --required-min 34
+```
+
+量尺先證明看得到，才判產品。對到 0 筆、少於 `--expect-min`、`--real-line` 對不上、trace 截斷而需要的列不夠：INVALID（exit 1）。最後一行 `RULER: OK|INVALID matches=n files=n problems=n`。只讀。
+
+### run_plan_check.py（2.6.0-ds.6，上游 2.6.0 N2）
+
+```text
+python -I -X utf8 run_plan_check.py --plan PLAN.json --repo <工作樹> --commit <要跑的 commit>
+python -I -X utf8 run_plan_check.py --plan PLAN.json --log r1=run1.log r2=run2.log
+```
+
+計畫檔（run-plan-v1）每場寫 `args`、每個開關的 `code`（`path:line`）、每個輸出項的 `code`。跑之前查程式位置在 commit 裡；跑完比對 log 的啟動參數。不符的場次 INVALID，不判。最後一行 `RUN_PLAN: OK|STOP runs=n problems=n`。只讀。
+
+### 2.6.0-ds.6 的選項（pre_tr、pack_check、waiver，上游 2.6.0 N3、N4、N6）
+
+- `pre_tr.py` 設定的 `inputs`：`[{"path": "Library/x.json", "sha256": "...", "source": "從哪裡拿"}]`，路徑相對 `--repo`；缺了 `MISSING_INPUT`，雜湊不同 `INPUT_CHANGED`。最後一行結尾 `inputs_bad=n`。
+- `pack_check.py`：重複內容 `~ DUPLICATE`，最後一行結尾 `unique=n`；manifest 的 `"required_segments": {"swing_t0_t8": [100, 101, 102]}` 沒有獨特圖就 FAIL。
+- `waiver.py snooze --file W.json --lane A B C --until "<事件>" --to 2026-11-27T00:00`：收尾時一次寫好全部線；`lift` 也可給多條線。
 
 ## 限制
 
