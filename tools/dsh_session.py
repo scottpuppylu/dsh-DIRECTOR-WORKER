@@ -99,35 +99,64 @@ function decode(buf) {
   }
   return { text: text.join(''), warnings: warnings };
 }
+const HEADER_PREFIX_BYTES = 8192;
+function readPrefix(f, maxBytes) {
+  const fd = fs.openSync(f, 'r');
+  try {
+    const tmp = Buffer.allocUnsafe(maxBytes);
+    let total = 0;
+    while (total < maxBytes) {
+      const n = fs.readSync(fd, tmp, total, maxBytes - total, total);
+      if (n <= 0) break;
+      total += n;
+    }
+    return tmp.subarray(0, total);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+function extractHeader(buf) {
+  const pos = positions(buf);
+  if (!pos.length) {
+    return { ok: false, line: null, incomplete: false, warnings: ['no zstd frame found'] };
+  }
+  let start = pos[0], cand = 1, text = '';
+  while (text.indexOf('\n') < 0 && start < buf.length) {
+    let done = false;
+    while (cand < pos.length) {
+      const end = pos[cand];
+      try { text += frameText(buf, start, end); start = end; cand++; done = true; break; }
+      catch (e) { cand++; }
+    }
+    if (!done) {
+      try { text += frameText(buf, start, buf.length); start = buf.length; }
+      catch (e) {
+        return { ok: false, line: null, incomplete: true, warnings: ['last frame not decoded'] };
+      }
+    }
+  }
+  const nl = text.indexOf('\n');
+  const line = (nl >= 0 ? text.slice(0, nl) : text).replace(/^\uFEFF/, '').trim();
+  return { ok: Boolean(line), line: line || null, incomplete: nl < 0, warnings: [] };
+}
 const mode = process.argv[1];
-const files = process.argv.slice(2);
+let files = [];
+try { files = JSON.parse(fs.readFileSync(0, 'utf8') || '[]'); } catch (e) { files = []; }
 if (mode === 'header') {
   for (const f of files) {
     const out = { path: f, ok: false, line: null, warnings: [] };
-    let buf = null;
-    try { buf = fs.readFileSync(f); } catch (e) { out.warnings.push('cannot read: ' + String(e && e.message || e)); }
-    if (buf) {
-      const pos = positions(buf);
-      if (!pos.length) {
-        out.warnings.push('no zstd frame found');
-      } else {
-        let start = pos[0], cand = 1, text = '';
-        while (text.indexOf('\n') < 0 && start < buf.length) {
-          let done = false;
-          while (cand < pos.length) {
-            const end = pos[cand];
-            try { text += frameText(buf, start, end); start = end; cand++; done = true; break; }
-            catch (e) { cand++; }
-          }
-          if (!done) {
-            try { text += frameText(buf, start, buf.length); start = buf.length; }
-            catch (e) { out.warnings.push('last frame not decoded'); break; }
-          }
-        }
-        const nl = text.indexOf('\n');
-        const line = (nl >= 0 ? text.slice(0, nl) : text).replace(/^\uFEFF/, '').trim();
-        if (line) { out.line = line; out.ok = true; }
+    let head = null;
+    try { head = readPrefix(f, HEADER_PREFIX_BYTES); }
+    catch (e) { out.warnings.push('cannot read: ' + String(e && e.message || e)); }
+    if (head !== null) {
+      let got = extractHeader(head);
+      if ((!got.ok || got.incomplete) && head.length === HEADER_PREFIX_BYTES) {
+        try { got = extractHeader(fs.readFileSync(f)); }
+        catch (e) { got = { ok: false, line: null, warnings: ['cannot read: ' + String(e && e.message || e)] }; }
       }
+      out.ok = got.ok;
+      out.line = got.line;
+      out.warnings = got.warnings;
     }
     process.stdout.write(JSON.stringify(out) + '\n');
   }
@@ -135,7 +164,7 @@ if (mode === 'header') {
   for (const f of files) {
     let buf = null;
     try { buf = fs.readFileSync(f); } catch (e) {
-      process.stdout.write('' );
+      process.stdout.write('');
       process.stderr.write(JSON.stringify({ path: f, error: 'cannot read: ' + String(e && e.message || e) }) + '\n');
       continue;
     }
@@ -184,24 +213,120 @@ def default_projcache_root():
     return pathlib.Path(value).expanduser() if value else dsh_home() / "storages" / "session_projcache" / "sessions"
 
 
+MIN_NODE_MAJOR = 22
+_NODE_PROBE_CACHE = {}
+
+
+def _parse_node_semver(text):
+    match = re.match(r"^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?", (text or "").strip())
+    if not match:
+        return None
+    return (int(match.group(1)), int(match.group(2) or 0), int(match.group(3) or 0))
+
+
+def probe_node(exe):
+    """Check that EXE is runnable Node >= 22 with zlib.zstdDecompressSync."""
+    path = pathlib.Path(exe)
+    try:
+        st = path.stat()
+        key = (str(path), st.st_mtime_ns, st.st_size)
+    except OSError:
+        return {"path": str(path), "version": None, "major": None, "has_zstd": False,
+                "ok": False, "reason": "executable not found"}
+    if key in _NODE_PROBE_CACHE:
+        return dict(_NODE_PROBE_CACHE[key])
+    script = "process.versions.node + '|' + (typeof require('zlib').zstdDecompressSync === 'function')"
+    info = {"path": str(path), "version": None, "major": None, "has_zstd": False, "ok": False, "reason": ""}
+    try:
+        done = subprocess.run([str(path), "-p", script], capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", timeout=20)
+    except (OSError, subprocess.SubprocessError) as error:
+        info["reason"] = f"failed to run: {error}"
+        _NODE_PROBE_CACHE[key] = info
+        return dict(info)
+    if done.returncode != 0:
+        detail = _short(done.stderr or done.stdout) or f"exit {done.returncode}"
+        info["reason"] = f"probe exited {done.returncode}: {detail}"
+        _NODE_PROBE_CACHE[key] = info
+        return dict(info)
+    out = (done.stdout or "").strip()
+    ver_str, _, zstd_str = out.partition("|")
+    parsed = _parse_node_semver(ver_str)
+    if parsed is None or not zstd_str:
+        info["reason"] = f"unexpected probe output: {_short(out)}"
+        _NODE_PROBE_CACHE[key] = info
+        return dict(info)
+    major = parsed[0]
+    has_zstd = zstd_str.strip().lower() == "true"
+    info["version"] = f"v{ver_str.strip().lstrip('v')}"
+    info["major"] = major
+    info["has_zstd"] = has_zstd
+    if major < MIN_NODE_MAJOR:
+        info["reason"] = f"Node {info['version']} is below minimum required Node {MIN_NODE_MAJOR}+"
+    elif not has_zstd:
+        info["reason"] = f"Node {info['version']} lacks zlib.zstdDecompressSync"
+    else:
+        info["ok"] = True
+    _NODE_PROBE_CACHE[key] = info
+    return dict(info)
+
+
+def find_node_info():
+    """Return probe dict for the first usable Node 22+ executable, or first rejected/missing diagnostic."""
+    override = (os.environ.get("DSH_NODE") or "").strip()
+    if override:
+        found = _node_candidate(pathlib.Path(override))
+        if not found and os.sep not in override and "/" not in override:
+            which = shutil.which(override)
+            if which:
+                found = pathlib.Path(which)
+        if not found:
+            return {"path": override, "version": None, "major": None, "has_zstd": False,
+                    "ok": False, "reason": f"DSH_NODE does not point to a file: {override}"}
+        return probe_node(found)
+    candidates = []
+    seen = set()
+
+    def add(path):
+        resolved = _node_candidate(pathlib.Path(path))
+        if not resolved:
+            return
+        norm = os.path.normcase(os.path.abspath(str(resolved)))
+        if norm not in seen:
+            seen.add(norm)
+            candidates.append(resolved)
+
+    pattern = str(dsh_home() / "dsh-runtimes" / "*" / "dependencies" / "node" / "bin")
+    for bindir in sorted(glob.glob(pattern), reverse=True):
+        add(pathlib.Path(bindir))
+    for name in ("node", "node.exe"):
+        which = shutil.which(name)
+        if which:
+            add(which)
+    for folder in os.environ.get("PATH", "").split(os.pathsep):
+        if folder:
+            add(pathlib.Path(folder))
+    rejected = None
+    for cand in candidates:
+        info = probe_node(cand)
+        if info["ok"]:
+            return info
+        if rejected is None:
+            rejected = info
+    if rejected is not None:
+        return rejected
+    return {"path": None, "version": None, "major": None, "has_zstd": False,
+            "ok": False, "reason": f"no Node {MIN_NODE_MAJOR}+ executable found"}
+
+
 def find_node():
-    """Path to a Node executable that has zlib.zstdDecompressSync, or None.
+    """Path to a Node executable that is Node >= 22 and has zlib.zstdDecompressSync, or None.
 
     Looked up in this order: env DSH_NODE (an executable or a folder holding one), DSH_HOME/dsh-runtimes/*/
     dependencies/node/bin/node.exe (and .../node), then "node"/"node.exe" on PATH.
     """
-    candidate = os.environ.get("DSH_NODE")
-    if candidate:
-        found = _node_candidate(pathlib.Path(candidate))
-        if found:
-            return str(found)
-    pattern = str(dsh_home() / "dsh-runtimes" / "*" / "dependencies" / "node" / "bin" / "node*")
-    for path in sorted(glob.glob(pattern), reverse=True):
-        found = _node_candidate(pathlib.Path(path))
-        if found:
-            return str(found)
-    found = shutil.which("node") or shutil.which("node.exe")
-    return found or None
+    info = find_node_info()
+    return info["path"] if info and info.get("ok") else None
 
 
 def _node_candidate(path):
@@ -217,20 +342,26 @@ def _node_candidate(path):
 
 
 def require_node():
-    """The Node executable, or NodeMissing with the places that were tried."""
-    node = find_node()
-    if not node:
-        raise NodeMissing("no Node.js found to decode zstd session logs; set DSH_NODE to a Node 22+ executable "
-                          f"or install the DSH runtime under {dsh_home() / 'dsh-runtimes'} "
+    """The Node executable, or NodeMissing with the places that were tried or why it failed."""
+    info = find_node_info()
+    if info and info.get("ok"):
+        return info["path"]
+    if info and info.get("path"):
+        raise NodeMissing(f"Node executable {info['path']} cannot decode zstd session logs ({info.get('reason')}); "
+                          f"set DSH_NODE to a Node {MIN_NODE_MAJOR}+ executable or install the DSH runtime under "
+                          f"{dsh_home() / 'dsh-runtimes'} "
                           "(dsh_usage.py can still read the plain-JSON projection cache)")
-    return node
+    raise NodeMissing(f"no Node {MIN_NODE_MAJOR}+ found to decode zstd session logs; set DSH_NODE to a Node 22+ executable "
+                      f"or install the DSH runtime under {dsh_home() / 'dsh-runtimes'} "
+                      "(dsh_usage.py can still read the plain-JSON projection cache)")
 
 
 def _run_node(mode, paths, timeout=300):
     node = require_node()
-    command = [node, "-e", _DECODER, mode] + [str(p) for p in paths]
+    command = [node, "-e", _DECODER, mode]
+    payload = json.dumps([str(p) for p in paths]).encode("utf-8")
     try:
-        done = subprocess.run(command, capture_output=True, timeout=timeout)
+        done = subprocess.run(command, input=payload, capture_output=True, timeout=timeout)
     except (OSError, subprocess.SubprocessError) as error:
         raise DecodeError(f"node failed to run ({node}): {error}") from error
     stdout = done.stdout.decode("utf-8", "replace")

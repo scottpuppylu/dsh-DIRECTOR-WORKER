@@ -62,12 +62,17 @@ def importlib_module(spec):
 dsh = load_local("dsh_session")
 
 TOOL = "dsh_doctor"
-REQUIRED_TOOLS = ("gate_check.py", "scope_check.py", "evidence_record.py", "report_vs_audit.py", "trace_report.py",
-                  "round_check.py", "status_gen.py", "metrics_report.py", "memory_size_check.py", "secret_mask.py",
-                  "pause_ctl.py", "audit_log.py", "vocabulary.json", "guard_rules.json",
-                  "dsh_session.py", "dsh_usage.py", "dsh_audit.py", "dsh_doctor.py", "dsh_setup_check.py",
-                  "dsh_guard.py", "selftest_ds.py", "DSH-TOOLS.md", "safety_gate.py",
-                  "bootstrap_repo.py")
+REQUIRED_TOOLS = (
+    "audit_log.py", "bootstrap_repo.py", "completion.py", "delete_guard.py", "dispatch_check.py",
+    "dsh_audit.py", "dsh_doctor.py", "dsh_guard.py", "dsh_session.py", "dsh_setup_check.py",
+    "dsh_usage.py", "evidence_record.py", "flag_check.py", "gate_check.py", "hash_check.py",
+    "inject_scan.py", "line_brief.py", "memory_size_check.py", "metrics_report.py", "pack_check.py",
+    "pause_ctl.py", "pre_tr.py", "ran_line.py", "release.py", "report_vs_audit.py",
+    "resume_archive.py", "resume_inject.py", "round_check.py", "ruler_check.py", "run_plan_check.py",
+    "safety_gate.py", "scope_check.py", "secret_mask.py", "selftest_ds.py", "sim_check.py",
+    "status_gen.py", "trace_report.py", "verify_dsh_run.py", "waiver.py",
+    "vocabulary.json", "guard_rules.json", "DSH-TOOLS.md",
+)
 REMOVED_TOOLS = ("hook_guard.py", "setup_project_settings.py", "context_probe.py", "usage_report.py", "usage_mix.py",
                  "doctor.py", "setup_check.py", "choice_reconcile.py", "browser_check.py", "poll_hint.py", "selftest.py")
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -82,19 +87,15 @@ def check_python():
 
 
 def check_node():
-    node = dsh.find_node()
-    if not node:
-        return "FAIL", ("no Node 22+ found (set DSH_NODE or install the DSH runtime under "
-                        f"{dsh.dsh_home() / 'dsh-runtimes'}); dsh_audit.py and the JSONL fallback need it")
-    version = None
-    try:
-        done = subprocess.run([node, "--version"], capture_output=True, text=True, encoding="utf-8",
-                              errors="replace", timeout=20)
-        if done.returncode == 0:
-            version = done.stdout.strip()
-    except (OSError, subprocess.SubprocessError):
-        pass
-    return "OK", f"{node}" + (f" ({version})" if version else "")
+    info = dsh.find_node_info()
+    if info and info.get("ok"):
+        return "OK", f"{info['path']} ({info['version']}, zstd ok)"
+    if info and info.get("path"):
+        return "FAIL", (f"{info['path']}: {info.get('reason') or 'unusable Node'} "
+                        "(set DSH_NODE to a Node 22+ executable or install the DSH runtime under "
+                        f"{dsh.dsh_home() / 'dsh-runtimes'})")
+    return "FAIL", ("no Node 22+ found (set DSH_NODE or install the DSH runtime under "
+                    f"{dsh.dsh_home() / 'dsh-runtimes'}); dsh_audit.py and the JSONL fallback need it")
 
 
 def check_dsh_home():
@@ -155,16 +156,22 @@ def check_latest_session(root, node_ok):
 
 
 def read_profile(path):
-    """(model, effort, provider) found in the profile patch YAML, by simple line matching (no YAML module)."""
+    """(model, effort, provider) found in the agent-default-model block of the profile patch YAML (fallback full text)."""
     try:
         text = path.read_text(encoding="utf-8-sig", errors="replace")
     except OSError:
         return None
+    block = text
+    marker = re.search(r"^[ \t]*-[ \t]*id:[ \t]*agent-default-model\b.*$", text, re.M)
+    if marker:
+        tail = text[marker.end():]
+        nxt = re.search(r"^(?:[ \t]*-[ \t]*id:[ \t]*|[A-Za-z_][A-Za-z0-9_-]*[ \t]*:)", tail, re.M)
+        block = tail[:nxt.start()] if nxt else tail
     values = {}
     for key in ("provider", "model", "reasoningEffort"):
-        found = re.search(rf"^[ \t]*{key}[ \t]*:[ \t]*(\S+)", text, re.M)
+        found = re.search(rf"^[ \t]*{key}[ \t]*:[ \t]*(\S+)", block, re.M)
         if found:
-            values[key] = found.group(1)
+            values[key] = found.group(1).strip().strip("'\"")
     return values or None
 
 
@@ -189,8 +196,12 @@ def check_session_policy(cache_root):
         sandbox = projection.row("sandboxMode")
         approval = projection.row("approvalState") if isinstance(projection.row("approvalState"), dict) else {}
         if sandbox or approval.get("policy"):
-            return "OK", (f"sandbox={sandbox or '?'} approval={approval.get('policy') or '?'} "
-                          f"(latest session {path.stem}; the sandbox and approval are per session, not a global setting)")
+            pol = approval.get("policy") or "?"
+            extra = ("; unconfined: no sandbox or approval barrier — rules and after-the-fact audit only"
+                     if sandbox == "danger-full-access" and pol == "never" else "")
+            return "OK", (f"sandbox={sandbox or '?'} approval={pol} "
+                          f"(latest session {path.stem}; the sandbox and approval are per session, not a global setting"
+                          f"{extra})")
     return "NOT_VERIFIED", "no sandbox / approval record in the projection cache"
 
 

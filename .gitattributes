@@ -1,0 +1,3 @@
+# Keep LF for shell scripts and GitHub Actions workflows even on Windows checkouts.
+*.sh text eol=lf
+.github/workflows/*.yml text eol=lf

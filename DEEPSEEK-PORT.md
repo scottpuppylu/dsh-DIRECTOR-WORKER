@@ -31,7 +31,7 @@
 | 待決問答 | `ask_user_question`（選項＋自訂答案，可多題）；**對 delegated 子代理會被拒絕**（DELEGATED_CALLER），只有總監能問 PO | 工具 schema、`dsh-tool-ask-user` README |
 | 成品展示 | `present`（上限 8 個檔；子代理做的檔要由總監自己呼叫） | 工具 schema、`dsh-tool-present` README |
 | 用量資料 | 另有純 JSON 的投影快取 `%USERPROFILE%\.dsh\storages\session_projcache\sessions\<id>.json`（`tokenUsage`、`contextPressure`、`sessionStats`、`sandboxMode`、`approvalState`…） | 實際檔案（version 7） |
-| worktree | 這個 profile **沒有** worktree 工具；所有子代理共享同一個 checkout | asar 套件清單、team:policy |
+| worktree | DSH 本身**沒有**內建 worktree 工具；本版預設先用 `dsh_session.py --worker-worktree` 建獨立 git worktree 再設 `cwd`，僅在宣告時共用 checkout | asar 套件清單、`tools/dsh_session.py` |
 | 成品展示 | `present`（成品檔）、聊天 markdown 圖 | 工具 schema |
 | 排程 | `schedule_create/list/view/edit`；只有 PO 明確要求可建；子代理不能用 | `dsh-tool-schedule` README |
 | 共享工作板 | Team 模式下的 `team_task_*`（本版不用作真相來源） | `dsh-tool-agent-team` README |
@@ -57,7 +57,7 @@
 | 工具前自動阻擋 | PreToolUse hook（hook_guard.py） | 無；沙箱模式＋核准政策＋規則＋事後 audit | NOT_PORTED |
 | 動作紀錄 | hook 寫 hash chain log | `dsh_audit.py` 從 session 紀錄重建（需 Node 解 zstd） | 替代（事後） |
 | 用量 | `get_usage`、Claude transcript | `dsh_usage.py` 讀 projcache JSON（純 Python） | 替代 |
-| worktree 隔離 | 每條線獨立 worktree | 共享 checkout；手動 git worktree 可行，但不是 DSH 機制 | 部分移植 |
+| worktree 隔離 | 每條線獨立 worktree | 已整合至 `dsh_session.py --worker-worktree`（預設隔離）與 `--shared`（例外共用），透過 `subagent` 的 `cwd` 隔離 | 部分移植 |
 | 容器 worker／網路管制 | container/run_worker.sh | 無 | NOT_PORTED |
 | 外掛清單與關閉 | `claude plugin list`／`plugins_off` | 使用者層設定，本版不改 | NOT_PORTED |
 | 記憶索引 | `~/.claude/projects/.../MEMORY.md` | AGENTS.md 指示鏈＋DIRECTOR 檔案 | NOT_PORTED（無索引檔） |

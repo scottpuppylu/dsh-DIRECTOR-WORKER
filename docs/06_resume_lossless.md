@@ -1,31 +1,22 @@
 # 06 無損續航
 
-目標：自動壓縮、錯誤、當機、重開機、關掉 DSH、PO 手動停止之後，每條工作線都從最後一個已驗證的 checkpoint 接著做，不重做已完成的事，也不沿用半成品。
+目標：壓縮、錯誤、當機或手動停止後，每條工作線都從最後一個已驗證 checkpoint 接續，不重做、不用半成品。
 
 ## 規則
 
 ### RESUME_STATE.md
 
-- 每條工作線在自己的工作資料夾根目錄維護一份（`templates/RESUME_STATE.md`），路徑登記在 `ACTIVE_WORKSTREAMS.md`。
-- **頂部固定四行** `PROGRESS / DOING / NEXT_STEP / COMMS`，只看這四行就要能接手。其餘欄位照範本逐欄寫齊，沒有就寫 NONE；IN_FLIGHT 列背景 job id（`job_list`）、等誰、排程 id。
-- **何時更新**：每個 checkpoint commit 之後、送 TEST REQUEST 之前、背景程序啟動和結束時、收到總監決定時。DSH 自動壓縮前後都一樣：一有進度就寫 RESUME_STATE，寫完才做下一步。
-- `UPDATED` 時間一律讀系統時鐘（`date`），不估計。
-- 寫完用 `tools/gate_check.py --resume <檔案>` 檢查格式和大小（超過照 `docs/06b` 把舊紀錄原文搬走，近期不動）；內容對不對要靠 `LAST_VERIFIED_CHECKPOINT` 和 repo 核對。
-- 有成果就 commit，不是快停才做；進度不能只留在對話裡。
+- 每條工作線在自己工作資料夾維護一份（`templates/RESUME_STATE.md`），路徑登記在 `ACTIVE_WORKSTREAMS.md`。
+- **頂部四行** `PROGRESS / DOING / NEXT_STEP / COMMS` 須可獨立接手；其餘照範本寫齊，沒有寫 NONE；`IN_FLIGHT` 記背景 job id、等誰、排程 id。
+- **更新時機**：checkpoint commit 後、TEST REQUEST 前、背景程序起迄、收到總監決定、DSH 自動壓縮前後。
+- `UPDATED` 讀系統時鐘（`date`），不估計。
+- 寫完跑 `tools/gate_check.py --resume <檔>` 驗格式與大小（超過照 `docs/06b` 搬走舊紀錄）；對錯核對 `LAST_VERIFIED_CHECKPOINT` 與 repo。
+- 有成果就 commit，進度不留對話。
 
-### 恢復
+### 恢復與每輪第一步
 
-任何 session 被打斷或 DSH 自動壓縮後，第一件事照 `docs/06b` 的恢復程序做（第 0 步先跑 `tools/resume_inject.py`，2.4.0-ds.6）。中斷的擷取、量測、打包、匯入一律重做，不沿用。
-worker 是子代理：總監用 `list_agents()` 找回、`send_message` 叫醒，子代理名稱登記在 `ACTIVE_WORKSTREAMS.md`。
-
-### 每輪第一步
-
-總監每次喚醒、壓縮或恢復後只有一個第一步：先唯讀跑檢查腳本、收集輸入（含待決帳與 `ask_user_question` 的回覆），再處理待決帳。見 `docs/06b`。
-
-### 機制與喚醒
-
-每個排程和防護機制都要能重建（`DIRECTOR/GUARDS.md`）。建立或修改機制、設定喚醒時，讀 `docs/06b`；DSH 沒有額度重置喚醒，排程喚醒只有 PO 明確要求才建。
+中斷或壓縮後第 0 步先跑 `tools/resume_inject.py`（`docs/06b`）；中斷的擷取、量測、打包、匯入重做。總監恢復或每輪開始先唯讀跑檢查腳本、收輸入與待決回覆（含 `ask_user_question`）再處理，並用 `list_agents()`／`send_message` 喚回登記於 `ACTIVE_WORKSTREAMS.md` 的子代理。每個排程與防護機制須可重建（`DIRECTOR/GUARDS.md`）；DSH 排程僅 PO 明確要求才建。
 
 ## 為什麼
 
-- 其他理由見 docs/10。
+- 見 docs/10。

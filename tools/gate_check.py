@@ -1403,6 +1403,8 @@ def usage_lines(director, usage=None):
         return [f"  ~ WARN USAGE: {usage_path} says NO_DATA ({data.get('reason', '')}); the usage cannot be compared"]
     if not isinstance(data, dict):
         return [f"  ~ WARN USAGE: {usage_path} is not a dsh_usage.py --out file"]
+    if data.get("partial"):
+        return [f"  ~ WARN USAGE: {usage_path} is partial (invalid token field(s); see warnings)"]
     return [f"  ok USAGE: {usage_path}"]
 
 
@@ -1993,6 +1995,13 @@ def sequence_problems(order_text, order_path, log_text, log_path, repo, notes):
 
 
 E2E_ENTRY = re.compile(r"^[ \t]*ENTRY_POINT[ \t]*[:=][ \t]*\S", re.M)
+E2E_EXIT = re.compile(
+    r"^[ \t]*EXIT_CODE[ \t]*[:=][ \t]*(-?\d+)\b|\bexit[ \t]*=[ \t]*(-?\d+)\b|\bCommand exited with code[ \t]+(-?\d+)\b",
+    re.I | re.M,
+)
+E2E_FAIL_MARKER = re.compile(r"^[ \t]*(?:FAILED\b|FAIL\b|ERROR:|Traceback \(most recent call last\):)", re.M)
+E2E_PASS_MARKER = re.compile(r"^[ \t]*(?:RESULT|STATUS|VERDICT)[ \t]*[:=][ \t]*(?:PASS|OK|SUCCESS)\b", re.I | re.M)
+E2E_CANDIDATE_FIELD = re.compile(r"^[ \t]*(?:CANDIDATE_HEAD|CANDIDATE|COMMIT|HEAD)[ \t]*:[ \t]*([0-9a-fA-F]{7,40})\b", re.M)
 
 
 FEAS_FIELD = re.compile(r"^[ \t]*(FEASIBILITY|FEASIBLE_COUNT|SCRIPT|RESULT)[ \t]*[:=][ \t]*(.*?)[ \t]*$", re.M)
@@ -2071,8 +2080,17 @@ def feasibility_problems(path, notes):
     return problems
 
 
-def final_problems(folder, notes):
-    """2.2.5 (B5): final acceptance of a DIRECTOR folder (or a folder holding DIRECTOR/)."""
+def _e2e_matches_candidate(txt, candidate):
+    """Return True if E2E record has a structured candidate field matching candidate SHA, None if unbound, False if bound elsewhere."""
+    cands = [m.group(1).lower() for m in E2E_CANDIDATE_FIELD.finditer(txt)]
+    if not cands:
+        return None
+    cand_low = candidate.lower()
+    return any(cand_low.startswith(c) or c.startswith(cand_low) for c in cands)
+
+
+def final_problems(folder, notes, allow_incomplete_e2e=False, candidate=None):
+    """2.2.5 (B5) / 2.6.0-ds.7 (A4): final acceptance of a DIRECTOR folder requiring completed (and optional candidate-bound) E2E outcome(s)."""
     base = pathlib.Path(folder)
     if not (base / "evidence").is_dir() and (base / "DIRECTOR").is_dir():
         base = base / "DIRECTOR"
@@ -2082,8 +2100,55 @@ def final_problems(folder, notes):
     if not records:
         problems.append(f"E2E: no end-to-end evidence in {e2e}; before the final verdict the lead runs the spec's "
                         "scenarios once through the product's public entry point and keeps the output there")
-    elif not any(E2E_ENTRY.search(read_or_none(p) or "") for p in records):
-        notes.append(f"WARN E2E: no record in {e2e} names its `ENTRY_POINT:` (the one public entry point it ran)")
+    else:
+        raw_texts = [(p, read_or_none(p) or "") for p in records]
+        texts = []
+        for p, txt in raw_texts:
+            if candidate:
+                bound = _e2e_matches_candidate(txt, candidate)
+                if bound is False:
+                    other_cands = [m.group(1) for m in E2E_CANDIDATE_FIELD.finditer(txt)]
+                    notes.append(f"INFO E2E: ignored historical record {p.name} bound to different commit ({other_cands[0][:10]})")
+                    continue
+            texts.append((p, txt))
+
+        if not texts:
+            problems.append(f"E2E: candidate commit {candidate[:12] if candidate else ''} has no matching end-to-end evidence in {e2e}")
+        else:
+            if not any(E2E_ENTRY.search(txt) for _, txt in texts):
+                notes.append(f"WARN E2E: no record in {e2e} names its `ENTRY_POINT:` (the one public entry point it ran)")
+            completed_texts = []
+            e2e_failed = False
+            for p, txt in texts:
+                file_failed = False
+                file_zero_exit = False
+                for xm in E2E_EXIT.finditer(txt):
+                    code_str = next((g for g in xm.groups() if g is not None), None)
+                    if code_str is None:
+                        continue
+                    code = int(code_str)
+                    if code != 0:
+                        problems.append(f"E2E: {p.name} recorded non-zero exit code ({code})")
+                        e2e_failed = True
+                        file_failed = True
+                    else:
+                        file_zero_exit = True
+                fm = E2E_FAIL_MARKER.search(txt)
+                if fm:
+                    problems.append(f"E2E: {p.name} contains failure marker ({fm.group(0).strip()})")
+                    e2e_failed = True
+                    file_failed = True
+                if not file_failed and (file_zero_exit or E2E_PASS_MARKER.search(txt)):
+                    completed_texts.append((p, txt))
+            if not e2e_failed and not completed_texts:
+                msg = f"E2E_INCOMPLETE: no record in {e2e} contains an explicit completed outcome (e.g. `EXIT_CODE: 0` or `RESULT: PASS`)"
+                if allow_incomplete_e2e:
+                    notes.append(f"WARN {msg}")
+                else:
+                    problems.append(msg)
+            if candidate and completed_texts:
+                if not any(_e2e_matches_candidate(txt, candidate) is True for _, txt in completed_texts):
+                    problems.append(f"E2E: candidate commit {candidate[:12]} lacks a completed record with COMMIT:/CANDIDATE_HEAD: in {e2e}")
     register = base / "DECISION_REGISTER.md"
     text = read_or_none(register) if register.is_file() else None
     if text is None:
@@ -2417,7 +2482,7 @@ def main():
     ap.add_argument("--match", nargs=2, action="append", default=[], metavar=("REPORT", "ORDER"))
     ap.add_argument("--evidence-dir", metavar="DIR", help="with --match: AUTO PASS rows need a passing evidence record here")
     ap.add_argument("--dispatch-log", metavar="LOG", help="with --match: the order's hash must equal its DISPATCH line here")
-    ap.add_argument("--candidate", metavar="SHA", help="with --match: the commit under review, 40 hex digits (git rev-parse <branch>)")
+    ap.add_argument("--candidate", metavar="SHA", help="with --match / --verdict / --po-acceptance / --final: the commit under review, 40 hex digits (git rev-parse <branch>)")
     ap.add_argument("--hash", nargs="+", default=[], metavar="FILE", help="print the hash ORDER_SHA256 compares and the DISPATCH line")
     ap.add_argument("--preflight", nargs=2, action="append", default=[], metavar=("REPORT", "ORDER"),
                     help="list what an older review lacks for a Strict review now (LACKS lines)")
@@ -2450,6 +2515,8 @@ def main():
                     "approval before the first commit, a spec review per order, reviews from another session")
     ap.add_argument("--final", metavar="DIRECTOR", help="2.2.5: final acceptance of a DIRECTOR folder: evidence/E2E/ and the "
                     "DD 驗收案例 column; 2.2.5-ds.5: usage.json from dsh_usage.py --out (WARN without it)")
+    ap.add_argument("--allow-incomplete-e2e", action="store_true", help="with --final: downgrade E2E_INCOMPLETE to WARN "
+                    "when PO explicitly accepts an incomplete E2E record; non-zero exit codes and failure markers still fail")
     ap.add_argument("--usage", metavar="FILE", help="2.2.5-ds.5: with --final, the dsh_usage.py --out file "
                     "(default DIRECTOR/usage.json)")
     ap.add_argument("--feasibility", nargs="+", default=[], metavar="RECORD", help="2.3.0: the feasibility record a fix "
@@ -2543,13 +2610,20 @@ def main():
                   + (f" (GOVERNANCE {mode.group(1)})" if mode else ""))
             for line in [f"  - {p}" for p in problems] + [f"  ~ {n}" for n in notes]:
                 print(line)
+    if a.allow_incomplete_e2e and not a.final:
+        ap.error("--allow-incomplete-e2e works with --final")
+    if a.candidate and not (a.match or a.verdict or a.po_acceptance or a.final):
+        ap.error("--candidate works with --match, --verdict, --po-acceptance or --final")
+    if a.candidate and not re.fullmatch(r"[0-9a-fA-F]{40}", a.candidate):
+        ap.error(f"--candidate takes the full commit, 40 hex digits (git rev-parse <branch>), got: {a.candidate}")
+    candidate = a.candidate.lower() if a.candidate else None
     if a.usage and not a.final:
         ap.error("--usage works with --final")
     if a.final:  # 2.2.5 (B5); 2.2.5-ds.5 (WO-DS-009 B2): plus the usage.json lines, never a failure
         if not pathlib.Path(a.final).is_dir():
             ap.error(f"--final: folder not found: {a.final}")
         notes = []
-        problems = final_problems(a.final, notes)
+        problems = final_problems(a.final, notes, allow_incomplete_e2e=a.allow_incomplete_e2e, candidate=candidate)
         late_failed += bool(problems) and not a.warn
         print(f"{('WARN' if a.warn else 'FAIL') if problems else 'OK  '} final {a.final}")
         for line in [f"  - {p}" for p in problems] + [f"  ~ {n}" for n in notes] + usage_lines(a.final, a.usage):
@@ -2584,11 +2658,6 @@ def main():
         ap.error("--dispatch-log works with --match, --preflight, --brief or --sequence")
     if a.dispatch_log and not pathlib.Path(a.dispatch_log).is_file():
         ap.error(f"--dispatch-log: file not found: {a.dispatch_log}")
-    if a.candidate and not (a.match or a.verdict or a.po_acceptance):
-        ap.error("--candidate works with --match, --verdict or --po-acceptance")
-    if a.candidate and not re.fullmatch(r"[0-9a-fA-F]{40}", a.candidate):
-        ap.error(f"--candidate takes the full commit, 40 hex digits (git rev-parse <branch>), got: {a.candidate}")
-    candidate = a.candidate.lower() if a.candidate else None
     log_text = pathlib.Path(a.dispatch_log).read_text(encoding="utf-8-sig") if a.dispatch_log else None
     dispatch = dispatch_records(log_text) if log_text is not None else None
     equivalent = equivalent_records(log_text) if log_text is not None else []
@@ -2667,7 +2736,8 @@ def main():
                 problems.append(problem)
             notes += safety.legacy_notes(config)
             repo = pathlib.Path(a.repo or ".")
-            problems += safety.order_problems(order_text, order_path, repo, config, notes)
+            problems += safety.order_problems(order_text, order_path, repo, config, notes,
+                                              candidate=candidate if kind == "match" else None)
             if kind == "order":
                 revision_sync_notes(order_text, order_path, notes)
                 base = base_config(order_path, a.config, notes)

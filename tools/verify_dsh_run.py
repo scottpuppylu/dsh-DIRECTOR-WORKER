@@ -962,6 +962,8 @@ def dsh_report_checks(s, out, ctx, run_dir, since, worker, sessions_root, cache_
 
 
 def main(argv=None):
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")  # before parse_args: --help prints during parsing
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", help="the run's verify config (JSON; templates/VERIFY_DSH_RUN.json)")
     ap.add_argument("--project-dir", help="the folder DSH ran in (sessions are picked by it; writes must stay inside)")
@@ -972,7 +974,6 @@ def main(argv=None):
     ap.add_argument("--sessions-root", help="DSH sessions folder (default: ~/.dsh/sessions)")
     ap.add_argument("--cache-root", help="DSH projection cache folder")
     args = ap.parse_args(argv)
-    sys.stdout.reconfigure(encoding="utf-8")
     try:
         s = Settings(args.config, args)
     except (OSError, ValueError) as error:

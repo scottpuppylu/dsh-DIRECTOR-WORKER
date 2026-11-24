@@ -47,7 +47,7 @@ FORBIDDEN:
 
 `*` 不跨資料夾，`**` 跨資料夾，沒有萬用字元的名稱連底下全部都算。兩邊都符合時以 FORBIDDEN 為準。不要寫「相關檔案」這種話。
 
-DSH 的子代理共用同一個 checkout（沒有 per-workstream worktree 隔離），所以 SCOPE / FORBIDDEN 和檔案歸屬（Single Writer）就是唯一的寫入邊界；總監交件時用 `scope_check.py` 對 diff，再看過實際改動。
+預設每張工單用 `dsh_session.py --worker-worktree` 開獨立 git worktree（`subagent` 的 `cwd` 指到該 worktree）；只有在明確寫 `WORKTREE = 共用 checkout` 時才共用同一工作區並以 `scope_check.py --shared`＋Single Writer 檔案歸屬隔離。DSH 沒有事前阻擋 hook，SCOPE / FORBIDDEN 就是寫入邊界，交件時必跑 `scope_check.py --candidate <候選 commit>` 核對實際 diff。
 
 選用：一定要改到的路徑。`scope_check.py` 會查每一條都有對到改動，沒對到就印 `MISSING` 並判越界；每一條都要在 SCOPE 裡、不在 FORBIDDEN 裡（`gate_check.py --order` 會查）。不需要就整段不寫。比的是最後結果（2.2）：改了又改回的不算；總監審查時用 `scope_check.py --order 本工單 --repo <repo> --candidate <候選 commit>`。
 

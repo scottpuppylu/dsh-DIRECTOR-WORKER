@@ -758,7 +758,7 @@ Standard 和 Strict 還有安全閘門：鎖定測試、計畫閘門、1 輪停�
 - 沒有 `interrupt_agent`、session 封存、讀別人上下文的工具；要停工作線先傳訊息請它停在安全狀態，真的失控由你在 DSH 介面中止。
 - 子代理的模型與 effort 開工時固定，不能中途改；要換就開接班人。
 - 子代理預設拿到完整工具集，不能只給讀取；盲審 reviewer 的限制靠指示＋事後 `dsh_audit.py` 核對。
-- 子代理共享同一個工作副本與檔案系統，沒有每位 worker 各自的 worktree；單一寫入者靠檔案歸屬、工單範圍和總監最後看 diff。
+- DSH 內建沒有 worktree 工具，預設隔離是開 worker 前先跑 `dsh_session.py --worker-worktree` 建獨立 git worktree 再把 `cwd` 指過去；只有工單明確宣告共用 checkout 時才共用，並改用 `scope_check.py --shared`、單一寫入者檔案歸屬和總監看 diff 把關。
 - `loops` 的 `child_error_unhandled` 只看「session 最後一個呼叫是失敗的子代理呼叫」；子代理結束事件（`subagent-settled`）本身的失敗狀態，本機紀錄還沒看過，不猜。
 - Claude 版 2.4.0 的三個 hook（打轉當場提醒、重開時自動接回、工具結果旁的注入警告）在 DSH 都沒有；這裡全部是事後查，或由 AI 照規則自己跑。
 - `dsh_audit.py reads` 不給每個檔案的成本：DSH 的用量記在每一步模型回應上，不在每個工具呼叫上，只給次數和 bytes（NOT_VERIFIED）。它只認得 `read` 工具和常見的讀檔命令，用腳本讀的檔不算。

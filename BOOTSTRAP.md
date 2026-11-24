@@ -3,7 +3,7 @@
 照順序做。每一步做完才做下一步。標「問 PO」的，放進待決帳（第 6 步：`ask_user_question` 加本機 `DIRECTOR/PO_PENDING.md`）並列進第一份回報，不自己做。
 照文件做不下去時（文件沒寫、寫錯、工具失敗），在 `DIRECTOR/DIRECTOR_LOG.md` 記一行 `BOOTSTRAP_STUCK 第 <n> 步 <原因>`；第 3 步之前卡住的，建好後補記。這是 `PURPOSE.md`「新專案導入時卡住的次數」的來源。
 `<RULES>` 指本規則包在本機的位置，`<REPO>` 指新專案的 git repo，`<WS>` 指放共用狀態的位置（見第 3 步）。
-本檔是 dsh-DIRECTOR-WORKER（簡稱 dshdw；舊名 DIRECTOR-WORK DeepSeek 版（DW-DS）），跑在 DeepSeek Harness（DSH）上；Claude 版原文見上游 https://github.com/scottpuppylu/DIRECTOR-WORK 的 `BOOTSTRAP.md`（v2.2.1）。DSH 上每個能力實際用哪個工具，見 `docs/11_dsh_operations.md`。
+本檔是 dsh-DIRECTOR-WORKER（簡稱 dshdw；舊名 DIRECTOR-WORK DeepSeek 版（DW-DS）），跑在 DeepSeek Harness（DSH）上；Claude 版原文見上游 https://github.com/scottpuppylu/DIRECTOR-WORK 的 `BOOTSTRAP.md`。DSH 上每個能力實際用哪個工具，見 `docs/11_dsh_operations.md`。
 
 ## 先問模式（第一則回覆）
 
@@ -28,7 +28,7 @@
 | 步驟 | 談需求前 | 延到 |
 |---|---|---|
 | 0 | 第 1～3 點，不改任何檔 | 語言衝突詳查等到相關時 |
-| 1 | 讀 README、PURPOSE、本檔、`docs/12`，和每輪必讀的 `docs/01、03、06、08`、`docs/11` | 其餘 docs 要用到時讀，最晚在派第一張工單前讀完；規則包版本在這時記下 |
+| 1 | 讀 README、PURPOSE、本檔、`docs/12`，和每輪必讀的 `docs/01、03、06、08`、`docs/11` | 其餘 docs（含 `docs/13_safety_gates.md`）要用到時讀，最晚在派第一張工單前讀完；規則包版本在這時記下 |
 | 2 | 只記產品目標、階段、已知 PO 決定 | build、測試、磁碟、重資源、成品怎麼看：首版範圍明確後 |
 | 3 | 只建上面的最少狀態 | 完整資料夾與 `tools/`：鎖卡後、開第一位 worker 前（`gate_check --order` 和追溯核對也在這時跑） |
 | 4、10 | 不做 | 開第一位 worker 前 |
@@ -58,7 +58,7 @@
    沒有 git 程式時，PO 可以從 GitHub 下載 ZIP 解開放到 `<RULES>`，版本的 commit 記 `NONE (ZIP)`；這樣只能讀規則、跑不需要 git 的工具，完整導入和派工要 git（第 0 步第 2 點）。
    PO 給了連結，就算同意下載這一個專案。跑工具前先讀過它的程式碼；第一輪會跑 `dsh_setup_check.py`、`dsh_doctor.py`、`dsh_usage.py`、`memory_size_check.py`、`gate_check.py`，其他的等要用時再讀。**每支只讀一次**：讀過的工具之後不再重讀原始碼、不跑 `--help`，用法和參數查 `tools/DSH-TOOLS.md`，報告格式用 `gate_check.py --report-skeleton`（2.2.3-ds.3：WO-DS-004 的 lead 把 `dsh_setup_check.py` 讀了 4 次、`gate_check.py` 3 次，還跑了 `--help`，多花約 76 萬 token）。
    記下規則包的版本（`<RULES>/VERSION` 加上 `git -C <RULES> rev-parse --short HEAD`），第 3 步寫進 `DIRECTOR_OPERATING_RULES.md`。
-2. 讀 `README.md`、`PURPOSE.md`、本檔、`docs/01` 到 `docs/10`（含 `06b`）、`docs/11_dsh_operations.md` 和 `docs/12`（小白快速路徑先讀 `docs/01、03、06、08、11、12`，其餘最晚在派第一張工單前讀完）。
+2. 讀 `README.md`、`PURPOSE.md`、本檔、`docs/01` 到 `docs/10`（含 `06b`）、`docs/11_dsh_operations.md`、`docs/12` 和 `docs/13_safety_gates.md`（小白快速路徑先讀 `docs/01、03、06、08、11、12`，其餘含 `docs/13_safety_gates.md` 最晚在派第一張工單前讀完）。
 3. 之後每輪只讀 README 標「每輪必讀」的檔。
 
 ## 2. 盤點專案（唯讀，結論寫檔）
@@ -138,7 +138,7 @@ DSH 沒有 Claude 版那種「壓縮門檻 250000」的專案設定，也沒有 
 ## 9. 外掛與 skill 清單（dshdw 不移植）
 
 DSH 的外掛與 skill 屬使用者層（profile），改了會影響所有 session 和專案；**沒有** Claude 版的「關掉本專案無關 plugin 省 token」做法。這一步只做兩件事：
-1. 讀 `~/.dsh/profiles/desktop/package.json`、`cordis.patch.yml` 和 `~/.agents/skills`（有的話）列出目前載入的外掛與 skill，記進 `DIRECTOR/研究` 或回報。
+1. 讀 `~/.dsh/profiles/desktop/package.json`、`cordis.patch.yml` 和 `~/.agents/skills`（有的話）列出目前載入的外掛與 skill，記進 `DIRECTOR/research/` 或回報。
 2. 覺得有跟本專案無關、值得關的，列成待決題給 PO；由 PO 決定要不要動使用者層設定，總監不動手。
 專案沒有這個需求就跳過，記一行 NOT_PORTED。
 
@@ -152,7 +152,7 @@ DSH 沒有 `MEMORY.md` 記憶索引。會被每次載入的是 `AGENTS.md`（專
 ## 10.5 專案 repo 的機械步驟
 
 2.2.5-ds.5 起本版拿掉 OpenSpec（理由見 CHANGELOG 2.2.5-ds.5），不找、不裝、不 init 任何 CLI；安全閘門（鎖定測試、計畫核准、規格審查、1 輪停止、不得自行關閉）照留，寫在 `director_work.json` 的 `"safety"`（`docs/13`）。這一步只做兩件事：
-1. 跑 `python -I -X utf8 <WS>/DIRECTOR/tools/bootstrap_repo.py --repo <REPO> --config <WS>/DIRECTOR/director_work.json`：把 `.memsearch/`（DSH 的記憶索引，工具產物）加進 `<REPO>/.git/info/exclude`。已做過會跳過，可以重跑；`--check` 只報告不寫。印 `BOOTSTRAP_REPO: DONE` 才算好。預期輸出只有 `DONE  exclude: …` 或 `OK    exclude: …` 一行和 `BOOTSTRAP_REPO: DONE`；設定檔還留著舊的 `sdd` 區塊時，多印 WARN：OpenSpec 的鍵（`openspec_bin`、`require_spec_*`）印「OpenSpec 已在 2.2.5-ds.5 移除，此鍵被忽略」，安全開關照讀並印「請搬到 safety」。照樣 exit 0，不寫設定、不找也不裝任何 CLI（L-061）。要清掉 WARN，就把安全開關搬到 `"safety"`、刪掉 `sdd` 區塊（`order_limits` 留著）。
+1. 跑 `python -I -X utf8 <WS>/DIRECTOR/tools/bootstrap_repo.py --repo <REPO> --config <WS>/DIRECTOR/director_work.json`：把 `.memsearch/`（DSH 的記憶索引，工具產物）加進 `git rev-parse --git-path info/exclude`（主 repo 或 linked worktree 共用的 `info/exclude`）。已做過會跳過，可以重跑；`--check` 只報告不寫。印 `BOOTSTRAP_REPO: DONE` 才算好。預期輸出只有 `DONE  exclude: …` 或 `OK    exclude: …` 一行和 `BOOTSTRAP_REPO: DONE`；設定檔還留著舊的 `sdd` 區塊時，多印 WARN：OpenSpec 的鍵（`openspec_bin`、`require_spec_*`）印「OpenSpec 已在 2.2.5-ds.5 移除，此鍵被忽略」，安全開關照讀並印「請搬到 safety」。照樣 exit 0，不寫設定、不找也不裝任何 CLI（L-061）。要清掉 WARN，就把安全開關搬到 `"safety"`、刪掉 `sdd` 區塊（`order_limits` 留著）。
 2. 派給 DSH worker 前讀 `docs/11`「省 token」：worker 開工先跑 `gate_check.py --report-skeleton`，一個階段一個 `run_code`。要驗證一次 DSH 試跑（PO 只送一段 prompt 的那種），用 `python -I -X utf8 <WS>/DIRECTOR/tools/verify_dsh_run.py --config <設定>`，設定格式見 `<RULES>/templates/VERIFY_DSH_RUN.json`。
 
 ## 11. 機制清單（給續航用）
@@ -199,10 +199,10 @@ DSH 沒有 `MEMORY.md` 記憶索引。會被每次載入的是 `AGENTS.md`（專
 ## 收尾（每一批工作的最後一份報告之前；2.2.5-ds.5）
 
 總監（lead）和 worker 都照這個順序收尾：
-1. **時間不得手填**。報告、裁決、`DIRECTOR_LOG` 裡的時間一律由工具產生：`DIRECTOR_LOG` 的時間從 `date`（PowerShell `Get-Date -Format "yyyy-MM-dd HH:mm"`）讀，`RAN:` 行照實際指令逐字抄、時間取指令結束時讀到的時間；DW 2.2.5 的時間戳工具移植進來後，RAN 行和時間改由它產生（`docs/02`）。WO-DS-008 r2：8 份驗收報告寫 01:32，實際是 01:17。
+1. **時間不得手填**。報告、裁決、`DIRECTOR_LOG` 裡的時間一律由工具產生：`DIRECTOR_LOG` 的時間從 `date`（PowerShell `Get-Date -Format "yyyy-MM-dd HH:mm"`）讀，`RAN:` 行與時間一律用 `tools/ran_line.py`（例 `ran_line.py --stamp`）照實際執行結果產生（`docs/02`）。WO-DS-008 r2：8 份驗收報告寫 01:32，實際是 01:17。
 2. 報告裡的 `WORKTREE:` 行不自己寫，用 `gate_check.py --report-skeleton` 產生的那行，或跑 `python -I -X utf8 <WS>/DIRECTOR/tools/dsh_session.py --worktree-status <checkout>` 貼上（依 `git worktree list` 判斷「隔離 worktree」或「共用 checkout」）。
 3. **最後一步跑用量**：`python -I -X utf8 <WS>/DIRECTOR/tools/dsh_usage.py --project-dir <WS> --out <WS>/DIRECTOR/usage.json`（worker 寫到自己的 `<WORK_DIR>/usage.json`）。沒跑的話這一批的 token 只能記 UNKNOWN（WO-DS-008 r2 的 sdd 組就是這樣）。
-4. 總監交最後一份報告前跑 `python -I -X utf8 <WS>/DIRECTOR/tools/gate_check.py --final <WS>/DIRECTOR`（另一個位置的用量檔加 `--usage <檔>`）：找不到或讀不到 `usage.json`、或內容是 `NO_DATA`，印 `~ WARN USAGE`（不改 exit code）。最終端到端驗收的檢查由 DW 2.2.5 移植進來後併在同一個 `--final`。
+4. 總監交最後一份報告前跑 `python -I -X utf8 <WS>/DIRECTOR/tools/gate_check.py --final <WS>/DIRECTOR`（另一個位置的用量檔加 `--usage <檔>`；可加 `--candidate <40 位 SHA>` 核對 E2E 的 `COMMIT:/CANDIDATE_HEAD:`）：同時驗證 `evidence/E2E/` 有明確完成結果（`EXIT_CODE: 0` 或 `RESULT: PASS`，否則 `E2E_INCOMPLETE` FAIL，僅在 PO 明准時加 `--allow-incomplete-e2e`）、`ENTRY_POINT:`、`DECISION_REGISTER.md` 的 DD 驗收案例，以及 `usage.json`（缺失／NO_DATA／`partial` 印 `~ WARN USAGE`，不改 exit code）。
 
 
 ## 一定要先問 PO 的事

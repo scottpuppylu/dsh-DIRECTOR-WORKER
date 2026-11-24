@@ -17,10 +17,10 @@ PO 核准是一次一件、一次一個 session，不推廣到之後的動作。
 ### git
 
 - 不 force push、不 `reset --hard`、不 `git clean`、不刪 worktree / 分支 / tag。
-- **不用裸 `git stash` / `git stash pop`**（所有子代理共享同一 checkout）；暫存用 WIP commit。要 stash 的做法見 `docs/06b`「git 細節」；DSH 沒有 hook 提醒，規則要自己守。
-- 不改凍結的歷史版本、golden 檔、回放資料；新行為用新版本 ID。
+- **不用裸 `git stash` / `git stash pop`**（共用 checkout 時會影響他人）；暫存用 WIP commit，stash 見 `docs/06b`。DSH 無 hook 提醒，須自守。
+- 不改凍結版本、golden 檔、回放資料；新行為用新版本 ID。
 - 不碰 repo 裡未追蹤、不屬於自己工單的資料。
-- 每個 gate checkpoint 本機 commit / tag。PO 授權的私人備份推送照 `docs/06b`「git 細節」用腳本推；只推自己的分支。
+- 每個 gate checkpoint 本機 commit / tag。PO 授權備份推送照 `docs/06b` 用腳本，只推自己分支。
 
 ### 檔案與磁碟
 
@@ -43,8 +43,8 @@ PO 核准是一次一件、一次一個 session，不推廣到之後的動作。
 
 ### dshdw 能擋到什麼
 
-- 沙箱只有三種模式（read-only / workspace-write / danger-full-access），只管檔案效果；核准政策依 session 設定。**沒有 hooks**，`hook_guard.py` 不移植。
-- push、merge、刪除、發布不會被自動擋，只能靠規則＋PO 核准＋`dsh_audit.py` 事後核對，不可宣稱自動擋；子代理共享檔案系統、預設全工具，越界靠工單範圍＋`scope_check.py`＋總監 diff（`docs/11`）。
+- 沙箱只有 `read-only / workspace-write / danger-full-access`，核准政策依 session 設定。**沒有 hooks**，`hook_guard.py` 不移植。
+- push、merge、刪除、發布無事前自動攔截，只能靠規則＋PO 核准＋`dsh_audit.py` 事後核對，不可宣稱自動擋；預設獨立 git worktree 隔離（例外共用 checkout 見 `docs/11`），越界靠工單範圍＋`scope_check.py`＋總監 diff。
 
 ## 為什麼
 

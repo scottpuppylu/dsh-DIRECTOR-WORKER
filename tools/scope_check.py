@@ -408,57 +408,63 @@ def main():
         names = ("diff", "--name-only", "--no-renames", "--ignore-submodules=none", "-z")
         commit = git(root, "rev-parse", "--verify", a.candidate + "^{commit}").strip() if a.candidate else None
         since = git(root, "merge-base", base, commit).strip() if commit else merge_base
-        states = {"committed": git(root, *names, merge_base, "HEAD"), "staged": git(root, *names, "--cached", "HEAD"),
-                  "unstaged": git(root, *names),
-                  "untracked": git(root, "ls-files", "--others", "--exclude-standard", "-z")}
-        marked, hidden = hidden_changes(root)
-        states = {state: {path for path in out.split("\0") if path} for state, out in states.items()}
-        states["unstaged"] |= hidden
-        uncommitted = states["staged"] | states["unstaged"] | states["untracked"]
+        states = {}
         others = set()
-        if shared:  # 2.2.4-ds.4 (B2): only this order's commits and its own uncommitted files
-            ids = order_ids(text, order)
-            mine = own_commits(root, since, commit or "HEAD", ids)
-            if not mine and commit:
-                mine = [commit]
-                notes.append(f"SHARED: no commit in {since[:10]}..{commit[:10]} names {'/'.join(ids) or 'this order'}; "
-                             "only --candidate itself is counted")
-            elif not mine:
-                notes.append(f"SHARED: no commit in {since[:10]}..HEAD names {'/'.join(ids) or 'this order'} yet; "
-                             "name the order ID in each commit message")
-            per_commit = {sha: commit_numstat(root, sha) for sha in mine}
-            committed = set().union(*per_commit.values()) if per_commit else set()
-            in_scope = {path for path in uncommitted if matches(path, scope_rx)} if not commit else set()
-            others = (uncommitted - in_scope) if not commit else set()
-            others |= {path for path in states["committed"] if path not in committed} if not commit else set()
-            states = {"own_commits": committed, "own_uncommitted": in_scope}
-            changed = sorted(committed | in_scope)
-            per_file = {}
-            for rows in per_commit.values():
-                for path, lines in rows.items():
-                    per_file[path] = per_file.get(path, 0) + lines
-            tracked = sorted(in_scope - states_untracked(root, in_scope))
-            if tracked:
-                for path, lines in numstat(git(root, "diff", "--numstat", "--no-renames", "-z", "HEAD", "--",
-                                               *tracked)).items():
-                    per_file[path] = per_file.get(path, 0) + lines
-            for path in in_scope - set(tracked):
-                per_file[path] = per_file.get(path, 0) + file_lines(root, path)
-            final = set(changed)
-            basis = (f"shared commits={len(mine)}" + (f" candidate={commit[:12]}" if commit else "")
-                     if required is not None else None)
+        if commit and not shared:
+            cand_changed = {path for path in git(root, *names, since, commit).split("\0") if path}
+            marked, hidden = {}, set()
+            states = {"candidate": cand_changed}
+            changed = sorted(cand_changed)
+            final = set(cand_changed) if required is not None else None
+            basis = f"candidate={commit[:12]}" if required is not None else None
+            per_file = None
         else:
-            changed = sorted(set().union(*states.values()))
-            final, basis = None, None
-            if required is not None:  # 2.2 (F14): the final result, not the union of layers
-                if commit:
-                    final = git(root, *names, since, commit)
-                    basis = f"candidate={commit[:12]}"
-                else:
+            states = {"committed": git(root, *names, merge_base, "HEAD"), "staged": git(root, *names, "--cached", "HEAD"),
+                      "unstaged": git(root, *names),
+                      "untracked": git(root, "ls-files", "--others", "--exclude-standard", "-z")}
+            marked, hidden = hidden_changes(root)
+            states = {state: {path for path in out.split("\0") if path} for state, out in states.items()}
+            states["unstaged"] |= hidden
+            uncommitted = states["staged"] | states["unstaged"] | states["untracked"]
+            if shared:  # 2.2.4-ds.4 (B2): only this order's commits and its own uncommitted files
+                ids = order_ids(text, order)
+                mine = own_commits(root, since, commit or "HEAD", ids)
+                if not mine and commit:
+                    mine = [commit]
+                    notes.append(f"SHARED: no commit in {since[:10]}..{commit[:10]} names {'/'.join(ids) or 'this order'}; "
+                                 "only --candidate itself is counted")
+                elif not mine:
+                    notes.append(f"SHARED: no commit in {since[:10]}..HEAD names {'/'.join(ids) or 'this order'} yet; "
+                                 "name the order ID in each commit message")
+                per_commit = {sha: commit_numstat(root, sha) for sha in mine}
+                committed = set().union(*per_commit.values()) if per_commit else set()
+                in_scope = {path for path in uncommitted if matches(path, scope_rx)} if not commit else set()
+                others = (uncommitted - in_scope) if not commit else set()
+                others |= {path for path in states["committed"] if path not in committed} if not commit else set()
+                states = {"own_commits": committed, "own_uncommitted": in_scope}
+                changed = sorted(committed | in_scope)
+                per_file = {}
+                for rows in per_commit.values():
+                    for path, lines in rows.items():
+                        per_file[path] = per_file.get(path, 0) + lines
+                tracked = sorted(in_scope - states_untracked(root, in_scope))
+                if tracked:
+                    for path, lines in numstat(git(root, "diff", "--numstat", "--no-renames", "-z", "HEAD", "--",
+                                                   *tracked)).items():
+                        per_file[path] = per_file.get(path, 0) + lines
+                for path in in_scope - set(tracked):
+                    per_file[path] = per_file.get(path, 0) + file_lines(root, path)
+                final = set(changed)
+                basis = (f"shared commits={len(mine)}" + (f" candidate={commit[:12]}" if commit else "")
+                         if required is not None else None)
+            else:
+                changed = sorted(set().union(*states.values()))
+                final, basis = None, None
+                if required is not None:  # 2.2 (F14): the final result, not the union of layers
                     final = git(root, *names, merge_base) + "\0" + "\0".join(states["untracked"])
                     basis = "worktree-final"
-            final = {path for path in (final or "").split("\0") if path} | (hidden if basis == "worktree-final" else set())
-            per_file = None
+                final = {path for path in (final or "").split("\0") if path} | (hidden if basis == "worktree-final" else set())
+                per_file = None
         size = None
         if re.search(r"^\s*GOVERNANCE\s*=\s*(Standard|Strict)\b", text, re.M):  # order_limits
             limits = limits_mod.order_limits(config, notes)

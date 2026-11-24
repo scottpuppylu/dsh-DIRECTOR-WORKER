@@ -3,6 +3,30 @@
 本 repo 是 [DIRECTOR-WORK](https://github.com/scottpuppylu/DIRECTOR-WORK) v2.2.2（Claude Code／Claude Desktop 版，MIT）的移植。
 上游的完整變更歷史保留在 [`CHANGELOG-upstream.md`](CHANGELOG-upstream.md)；本檔只記 dsh-DIRECTOR-WORKER（簡稱 dshdw；舊名 DIRECTOR-WORK DeepSeek 版（DW-DS））自己的變更。
 
+## 2.6.0-ds.7（2026-11-24）
+
+本版集中修復交接研究階段發現的所有工具、文件與環境缺陷（A1～A10、B2 與 CI 補齊），確保「閘門真的會擋」在乾淨 worktree、不完整 E2E、Token 統計、worktree ignore、session 稽核與環境健檢上全面落實。
+
+### 閘門與範圍檢查（A3、A4）
+- **A3 `scope_check.py --candidate` 與 `safety_gate.py`**：即使工作樹停在 `base` 且完全乾淨，`scope_check.py --candidate <SHA>` 仍會對 `since..candidate` 差異執行 `FORBIDDEN`／`OUTSIDE`／`PROTECTED` 掃描；`gate_check.py --match --candidate <SHA>` 同步把 `candidate` 傳入 `safety_gate.order_problems`，以 candidate commit 的 blob 雜湊驗證 `TESTS_LOCKED`。
+- **A4 `gate_check.py --final` 驗證 E2E 真正完成**：不再只看 `evidence/E2E/` 有無非空檔；要求明確成功結束證據（`EXIT_CODE: 0` 或 `RESULT: PASS`），捕捉非零結束碼與 `Traceback`/失敗標記；未完成時報 `E2E_INCOMPLETE`（僅在 PO 明確接受時以 `--allow-incomplete-e2e` 降級為 WARN，非零 exit 或失敗標記仍 FAIL）；新增 `--final --candidate <40 位 SHA>` 核對 `CANDIDATE_HEAD:`／`COMMIT:`，並對 `partial` 的 `usage.json` 輸出 `~ WARN USAGE`。
+
+### 用量、稽核與環境工具（A1、A2、A5～A9、B2）
+- **A1 / A2 / A8 `dsh_usage.py`**：
+  - `lastPromptTokens` 修正為僅計入 prompt 側（`input + cacheRead + cacheWrite`），移除誤併入的 `outputTokens`，與 DSH `contextPressure.pressureTokens` 一致（實測 120 份本機投影全數 0 誤差）。
+  - `--from-jsonl` 改為即使存在 projection cache 也實際重算 JSONL totals 與最後一請求 prompt tokens（並補齊 `sandbox`／`approval`／`surfaceTokens`），支援 `llm/retry-started` 與 `(turn, step, attempt)` slot 覆寫。
+  - 新增 `read_number()`／`read_usage()` 攔截非數值、bool、負數或非有限浮點欄位，紀錄警告並標記 `partial: true`。
+- **A5 / B2 `dsh_session.py` & `dsh_audit.py`**：
+  - `_DECODER` 改由 `stdin` JSON 傳遞檔案路徑清單（避免 Windows 命令列長度上限），`header` 模式優先只讀前 8 KB 前綴並在需要時回退全檔（實測 121 份真實 header 僅約 0.15 秒）。
+  - `selected_sessions()` 修正為 root session 先於 subagent（確保無 projcache 時先收集 `subagent/catalog` 命名），並先依 projcache／batch header 預過濾 `--project-dir`／`--since`／`--until`／`--session`，再僅對命中 session 全檔解壓（單一 session 重建從 ~24.7 秒降至 1 秒內，且不再對無關損壞或空 log 印誤警）。
+- **A6 `dsh_audit.py reads`**：支援多段前導語句（`$env:...`、`Set-Location`、`cd`、`cmd /c`、`pwsh -c`）、Windows 路徑與反斜線（`posix=False`）、`Get-Content`/`gc` 的 `-Path`/`-LiteralPath`/`-TotalCount`/`-Encoding` 等參數，並在引號無法解析時累加 `"unparsed"` 計數。
+- **A7 `bootstrap_repo.py`**：改用 `git rev-parse --git-path info/exclude`（並附 `commondir` 後援），於 linked git worktree 執行時正確寫入主 repo 共用 `info/exclude`，不再漏抓 `.memsearch/`。
+- **A9 & `dsh_doctor.py` / `dsh_setup_check.py`**：`dsh_session.py` 與 `dsh_doctor.py` 實測檢查 Node ≥ 22 與 `zlib.zstdDecompressSync`（保留 `DSH_NODE` 嚴格覆寫語意）；`dsh_doctor.py` 更新 `REQUIRED_TOOLS` 至 42 項、只從 `- id: agent-default-model` 區塊讀預設模型與 effort，並對 `danger-full-access + never` 補上未受限提示；`dsh_setup_check.py` 納入並驗證 `loop_guard`；`dsh_guard.py`、`dsh_setup_check.py`、`verify_dsh_run.py` 將 `sys.stdout.reconfigure(encoding="utf-8")` 移至 `parse_args` 之前。
+
+### 文件對齊、CI 與驗證（A10）
+- **A10 文件與指引修正**：統一 `docs/11_dsh_operations.md`、`templates/WORK_ORDER.md`、`README.md`、`DEEPSEEK-PORT.md` 與 `docs/08_safety_rules.md` 對「預設 `--worker-worktree` 獨立 git worktree、僅在宣告時退回 `--shared`」的說明；`docs/11` 新增「提示詞規則 vs 工具檢查 vs 硬防護」對照表；修補 `BOOTSTRAP.md`（納入 `docs/13_safety_gates.md`、修正 `DIRECTOR/research/`、移除過時寫法並指向 `ran_line.py` 與 `gate_check.py --final`）；更新 `tools/DSH-TOOLS.md`；精簡 `docs/06_resume_lossless.md` 與 `docs/08_safety_rules.md`，使 4 份每輪必讀文件總計 10,276 bytes LF（低於 11,000 bytes 上限）。
+- **CI 與測試**：新增 `.gitattributes` 與 `.github/workflows/ci.yml`（Windows + Ubuntu Python 3.9/3.12 + Node 24）；更新 `selftest_ds.py` 中 CI 安全測試與 E2E fixture，並新增 7 項 `2.6.0-ds.7` 回歸測試（`tests=115`）。
+
 ## 2.6.0-ds.6（2026-11-22）
 
 跟上上游 DW 2.6.0（分支 `claude/dw-v260`，本機 commit 787f67b）。上游 2.6.0 的兩個新工具和三個工具的新選項都是自己執行、只讀，不靠 hook，所以五支工具原樣搬（和上游逐位元組相同，換行 LF）。ds 序號不加：這一版沒有新的 DSH 試驗修正。安全閘門全部保留，不加回 OpenSpec／SDD。每輪必讀（指示鏈）沒有變大。上游原文見 `CHANGELOG-upstream.md`。

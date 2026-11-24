@@ -23,6 +23,7 @@ import argparse
 import importlib.util
 import pathlib
 import re
+import subprocess
 import sys
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -49,11 +50,34 @@ def git_dir(repo):
     return None
 
 
-def step_exclude(repo, check):
+def exclude_path(repo):
+    """Common git info/exclude path for REPO (resolving linked worktrees via git --git-path / commondir), or None."""
+    try:
+        done = subprocess.run(["git", "-C", str(repo), "rev-parse", "--git-path", "info/exclude"],
+                              capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20)
+        if done.returncode == 0:
+            out = done.stdout.strip()
+            if out:
+                path = pathlib.Path(out)
+                return path if path.is_absolute() else (repo / path).resolve()
+    except (OSError, subprocess.SubprocessError):
+        pass
     gd = git_dir(repo)
     if gd is None:
+        return None
+    commondir = gd / "commondir"
+    if commondir.is_file():
+        rel = commondir.read_text(encoding="utf-8", errors="replace").strip()
+        if rel:
+            base = pathlib.Path(rel)
+            gd = base if base.is_absolute() else (gd / base).resolve()
+    return gd / "info" / "exclude"
+
+
+def step_exclude(repo, check):
+    path = exclude_path(repo)
+    if path is None:
         return "FAIL", f"{repo} is not a git checkout (no .git); .memsearch/ not excluded"
-    path = gd / "info" / "exclude"
     text = path.read_text(encoding="utf-8") if path.is_file() else ""
     have = {line.strip() for line in text.splitlines()}
     missing = [item for item in EXCLUDES if item not in have and item.rstrip("/") not in have]

@@ -406,6 +406,8 @@ def strictest(hits):
 
 
 def main(argv=None):
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")  # before parse_args: --help prints during parsing
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--command", required=True, help="the shell command to check (one line)")
     ap.add_argument("--mode", choices=MODES, default="remind",
@@ -419,7 +421,6 @@ def main(argv=None):
     ap.add_argument("--cwd", help="folder relative paths are read from (default: the current folder)")
     ap.add_argument("--json", action="store_true", help="print one JSON object instead of a warning line")
     a = ap.parse_args(argv)
-    sys.stdout.reconfigure(encoding="utf-8")
     cwd = a.cwd or os.getcwd()
     home = rule_path(str(pathlib.Path.home()), None)
     rules_path = pathlib.Path(a.rules).expanduser() if a.rules else pathlib.Path(__file__).with_name("guard_rules.json")

@@ -440,14 +440,22 @@ def newest_session_log():
 
 @test
 def dsh_audit_and_report(tmp):
-    log = newest_session_log()
-    if log is None:
-        raise Skip("no DSH session log under " + str(dsh_home() / "sessions"))
+    root = dsh_home() / "sessions"
+    logs = sorted(root.glob("*/*/session.v*.jsonl.zstd"), key=lambda path: path.stat().st_mtime, reverse=True)
+    if not logs:
+        raise Skip("no DSH session log under " + str(root))
     out = tmp / "audit.jsonl"
-    proc = run_tool("dsh_audit", "build", "--out", out, "--session", log.parent.name, "--force")
-    text = text_of(proc)
-    if proc.returncode != 0 and "node" in text.lower() and "not found" in text.lower():
-        raise Skip("Node is needed to decode the session log: " + tail(text, 200))
+    proc = text = None
+    for log in logs[:25]:
+        proc = run_tool("dsh_audit", "build", "--out", out, "--session", log.parent.name, "--force")
+        text = text_of(proc)
+        if proc.returncode != 0 and "node" in text.lower() and "not found" in text.lower():
+            raise Skip("Node is needed to decode the session log: " + tail(text, 200))
+        if proc.returncode == 2 and "no tool calls found" in text:
+            continue
+        break
+    else:
+        raise Skip("none of the 25 newest DSH session logs contain tool calls")
     require(proc.returncode == 0, "dsh_audit build exit %s: %s" % (proc.returncode, tail(text)))
     require(out.is_file() and out.stat().st_size > 0, "dsh_audit build wrote no audit file")
     entries = [json.loads(line) for line in out.read_text(encoding="utf-8-sig").splitlines() if line.strip()]
@@ -552,13 +560,24 @@ def status_gen_round_trip(tmp):
 
 @test
 def dsh_doctor(tmp):
-    proc = run_tool("dsh_doctor")
+    fake_home = tmp / "doctor_dsh_home"
+    (fake_home / "sessions").mkdir(parents=True, exist_ok=True)
+    proc = run_tool("dsh_doctor", env={"DSH_HOME": str(fake_home)})
     text = text_of(proc)
     require("DSH_DOCTOR:" in text, "dsh_doctor printed no summary: " + tail(text))
     if proc.returncode != 0:
         failed = [line for line in text.splitlines() if "FAIL" in line]
-        raise AssertionError("dsh_doctor exit %s: %s" % (proc.returncode, tail("; ".join(failed) or text)))
-    return "no FAIL"
+        raise AssertionError("dsh_doctor (synthetic DSH_HOME) exit %s: %s"
+                             % (proc.returncode, tail("; ".join(failed) or text)))
+    if (dsh_home() / "sessions").is_dir():
+        live = run_tool("dsh_doctor")
+        ltext = text_of(live)
+        require("DSH_DOCTOR:" in ltext, "dsh_doctor live printed no summary: " + tail(ltext))
+        if live.returncode != 0:
+            failed = [line for line in ltext.splitlines() if "FAIL" in line]
+            raise AssertionError("dsh_doctor exit %s: %s" % (live.returncode, tail("; ".join(failed) or ltext)))
+        return "CI fixture PASS + live DSH_HOME PASS"
+    return "CI fixture PASS (no DSH_HOME sessions)"
 
 
 @test
@@ -1693,7 +1712,7 @@ def usage_final_225(tmp):
     code, out = final()
     require(code == 1 and "FAIL final" in out and "  - E2E: no end-to-end evidence in" in out and "~ WARN USAGE" in out,
             "--final without E2E evidence is not FAIL final, exit 1: " + tail(out))
-    write(director / "evidence" / "E2E" / "run.txt", "ENTRY_POINT: python -m calc 1 + 2\n3\n")
+    write(director / "evidence" / "E2E" / "run.txt", "ENTRY_POINT: python -m calc 1 + 2\nEXIT_CODE: 0\n3\n")
     cases = []
     code, out = final()
     cases.append(("missing", code == 0 and "~ WARN USAGE" in out and "not found" in out and "OK   final" in out
@@ -2440,8 +2459,8 @@ def final_wrong(module, base):
     for name, folder, content, want_problem, want_notes, not_notes in (
             ("no evidence folder", base / "nothing_here", None, True, [], []),
             ("only an empty file", base / "DIRECTOR", None, True, FINAL225_DD_NOTES, ["DD-03"]),
-            ("evidence", base / "DIRECTOR", "ENTRY_POINT: python -m tool run\n3 rows\n", False, FINAL225_DD_NOTES,
-             ["DD-03", "WARN E2E"])):
+            ("evidence", base / "DIRECTOR", "ENTRY_POINT: python -m tool run\nEXIT_CODE: 0\n3 rows\n", False,
+             FINAL225_DD_NOTES, ["DD-03", "WARN E2E"])):
         if content is None:
             if run_file.exists():
                 run_file.unlink()
@@ -2456,6 +2475,8 @@ def final_wrong(module, base):
         text = "\n".join(notes)
         if bool(problems) != want_problem or any(s not in text for s in want_notes) or any(s in text for s in not_notes):
             wrong.append("%s: %s %s" % (name, problems, notes))
+        elif want_problem and not any("no end-to-end" in p for p in problems):
+            wrong.append("%s: missing 'no end-to-end' in %s" % (name, problems))
     return wrong
 
 
@@ -2479,10 +2500,10 @@ def final_225(tmp):
     expect_tool("final 2.2.5: --warn", g, 0, "--final", director, "--warn", says="WARN final")
     write(e2e / "empty.txt", "")
     expect_tool("final 2.2.5: an empty file is no evidence", g, 1, "--final", director, says="  - E2E: no end-to-end")
-    run_file = write(e2e / "run.txt", "python -m tool run a.csv\n3 rows\n")
+    run_file = write(e2e / "run.txt", "python -m tool run a.csv\nEXIT_CODE: 0\n3 rows\n")
     expect_tool("final 2.2.5: evidence without ENTRY_POINT is a WARN", g, 0, "--final", director,
                 says=["OK   final", "~ WARN E2E: no record in", "`ENTRY_POINT:`"])
-    run_file.write_text("ENTRY_POINT: python -m tool run\n3 rows\n", encoding="utf-8")
+    run_file.write_text("ENTRY_POINT: python -m tool run\nEXIT_CODE: 0\n3 rows\n", encoding="utf-8")
     expect_tool("final 2.2.5: evidence with ENTRY_POINT", g, 0, "--final", director, says="OK   final", lacks="WARN E2E")
     expect_tool("final 2.2.5: a folder that does not exist", g, 2, "--final", base / "nope")
     wrong = final_wrong(load_tool("gate_check"), base)
@@ -6235,6 +6256,440 @@ def lessons_intake_260(tmp):
         hit = [line for line in lines if re.search(r"收件匣 (?:L-\d{3}、)*L-%03d\b" % n, line)]
         check230("docs/10 has 收件匣 L-%03d with a rule" % n, len(hit) == 1 and "→" in hit[0], hit[:2])
     return "%d lessons" % len(numbers)
+
+
+def _write_zstd_jsonl(node_exe, path, frames):
+    """Write a multi-frame .jsonl.zstd session log using Node's zlib.zstdCompressSync."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    script = (
+        "const fs = require('fs'), zlib = require('zlib'); "
+        "const chunks = JSON.parse(fs.readFileSync(0, 'utf8')); "
+        "fs.writeFileSync(process.argv[1], Buffer.concat(chunks.map(c => zlib.zstdCompressSync(Buffer.from(c, 'utf8')))));"
+    )
+    proc = subprocess.run([str(node_exe), "-e", script, str(path)], input=json.dumps(frames).encode("utf-8"),
+                          capture_output=True, timeout=TIMEOUT)
+    require(proc.returncode == 0, "node zstdCompressSync failed: " + proc.stderr.decode("utf-8", "replace"))
+
+
+@test
+def candidate_scope_267(tmp):
+    """2.6.0-ds.7 (A3): scope_check --candidate diffs since..candidate even on a clean checkout, and gate_check --match
+    --candidate hashes TESTS_LOCKED files from the candidate commit blob."""
+    if shutil.which("git") is None:
+        raise Skip("git is not on PATH")
+    folder = tmp / "cand267"
+    repo = folder / "repo"
+    repo.mkdir(parents=True)
+    git225(repo, "init", "-q", "-b", "main")
+    safety = load_tool("safety_gate")
+    base = commit225(repo, "base", {"app.py": "def f():\n    return 1\n", "secret.py": "k = 1\n",
+                                    "test_calc.py": CALC_TEST})
+    lock_sha = safety.file_hash(repo / "test_calc.py")
+    git225(repo, "checkout", "-q", "-b", "cand")
+    good_sha = commit225(repo, "WO-267: good change", {"app.py": "def f():\n    return 2\n"})
+    bad_sha = commit225(repo, "WO-267: bad change", {"app.py": "def f():\n    return 3\n", "secret.py": "k = 2\n",
+                                                     "test_calc.py": "# weakened\n"})
+    git225(repo, "checkout", "-q", base)  # leave worktree completely clean on base
+    work = folder / "work"
+    plan = write(work / "WO-267" / "PLAN.md", "- [x] 1.1 update app\n")
+    director = folder / "DIRECTOR"
+    write(director / "director_work.json", json.dumps({"schema_version": 1}))
+    order = write(director / "orders" / "WO-267.md", "\n".join([
+        "# WO-267 — candidate scope", "**candidate test**", "", "```text",
+        "ISSUED_BY      = 總監 2026-11-24 09:00", "REVISION       = 1", "TRACES_TO      = B-1",
+        "PRIMARY_WORKER = 子代理「w1」", "MODEL / EFFORT = deepseek-flash / high", "FALLBACK       = 同名子代理續談",
+        "GOVERNANCE     = Standard", f"BASE_REF       = main @ {base}", f"WORK_DIR       = {work.as_posix()}",
+        "WORKTREE       = D:/work/wt-267", "```", "", "```text", "SCOPE:", "- app.py", "FORBIDDEN:",
+        "- secret.py", "REQUIRED_CHANGES:", "- app.py", "TESTS_LOCKED:", f"- test_calc.py sha256={lock_sha}",
+        "```", "", "| ID | 類型 | 要求 | 驗證方法 | 預期 |", "|---|---|---|---|---|",
+        "| AC-1 | AUTO | f works | python -m unittest test_calc | exit 0 |", "",
+        "- DELIVERABLES: one commit", "- STOP_RULES: 同一根因 1 輪沒進展就停", ""]))
+    expect_tool("A3 clean worktree catches bad candidate", "scope_check", 1, "--order", order, "--repo", repo,
+                "--candidate", bad_sha,
+                says=["FORBIDDEN secret.py", "OUTSIDE   test_calc.py", "PROTECTED test_calc.py",
+                      "STATES: candidate=3", "SCOPE_CHECK: VIOLATION", "forbidden=1", "protected=1"])
+    expect_tool("A3 clean worktree accepts good candidate", "scope_check", 0, "--order", order, "--repo", repo,
+                "--candidate", good_sha,
+                says=["STATES: candidate=1", "PROTECTED_CHANGED: NONE", "SCOPE_CHECK: PASS", "changed=1"])
+    cfg = dict(safety.DEFAULTS)
+    bad_probs = safety.order_problems(order.read_text(encoding="utf-8"), order, repo, cfg, [], candidate=bad_sha)
+    good_probs = safety.order_problems(order.read_text(encoding="utf-8"), order, repo, cfg, [], candidate=good_sha)
+    require(any("test_calc.py changed in candidate" in p and "since it was locked" in p for p in bad_probs),
+            f"bad candidate probs: {bad_probs}")
+    require(not good_probs, f"good candidate probs: {good_probs}")
+    hproc = run_tool("gate_check", "--hash", order)
+    require(hproc.returncode == 0, "gate_check --hash failed: " + tail(text_of(hproc)))
+    dispatch_line = next(line.strip() for line in text_of(hproc).splitlines() if line.strip().startswith("DISPATCH "))
+    order_sha = re.search(r"sha=([0-9a-f]{64})", dispatch_line).group(1)
+    log = write(director / "DIRECTOR_LOG.md", "\n".join([
+        dispatch_line,
+        f"2026-11-24 09:05 +08:00 | SPEC_REVIEW WO-267 tokens=1 issues=0/0/0 adopted=0",
+        f"2026-11-24 09:06 +08:00 | PLAN_APPROVED WO-267 sha={safety.plan_hash(plan)}",
+    ]) + "\n")
+    report = write(folder / "TASK_REPORT.md", "\n".join([
+        "# TASK REPORT — WO-267",
+        f"ORDER: {order}", "REVISION: 1", f"ORDER_SHA256: {order_sha}", "WORKTREE: 隔離 worktree",
+        "AGENT_STATUS: COMPLETE", "COMMITS: " + good_sha,
+        "## 1. DONE", "updated app.py", "## 2. FILES", "- app.py",
+        "## 3. CHECKS", "| ID | RESULT | EXIT |", "|---|---|---|", "| AC-1 | PASS | 0 |",
+        "## 4. DIFF_REVIEWED", "SCOPE_CHECK: PASS base=" + base[:10] + " changed=1 forbidden=0 outside=0 missing=0",
+        "## 5. RISKS", "NONE", "## 6. NEXT", "NONE",
+    ]) + "\n")
+    expect_tool("gate_check --match --candidate catches locked test edit in candidate blob", "gate_check", 1,
+                "--match", report, order, "--repo", repo, "--dispatch-log", log, "--candidate", bad_sha,
+                says=["test_calc.py changed in candidate", "since it was locked"])
+    return "clean checkout + bad/good candidate + match candidate blob"
+
+
+@test
+def final_e2e_267(tmp):
+    """2.6.0-ds.7 (A4): gate_check --final verifies E2E completion (EXIT_CODE/RESULT: PASS), rejects incomplete or
+    failed E2E runs, supports --allow-incomplete-e2e downgrade only for E2E_INCOMPLETE, and checks --candidate binding."""
+    base = tmp / "final_e2e_267"
+    director = base / "DIRECTOR"
+    e2e = director / "evidence" / "E2E"
+    e2e.mkdir(parents=True)
+    write(director / "DECISION_REGISTER.md", FINAL225_REGISTER)
+    log_file = write(e2e / "run.txt", "ENTRY_POINT: python -m demo\nrunning step 1...\nstill working\n")
+    expect_tool("incomplete E2E fails", "gate_check", 1, "--final", director,
+                says=["FAIL final", "E2E_INCOMPLETE:"])
+    expect_tool("--allow-incomplete-e2e downgrades incomplete to WARN", "gate_check", 0,
+                "--final", director, "--allow-incomplete-e2e",
+                says=["OK   final", "~ WARN E2E_INCOMPLETE:"])
+    log_file.write_text("ENTRY_POINT: python -m demo\nEXIT_CODE: 1\n", encoding="utf-8")
+    expect_tool("non-zero E2E exit fails", "gate_check", 1, "--final", director,
+                says=["FAIL final", "non-zero exit code (1)"])
+    expect_tool("non-zero E2E exit STILL fails with --allow-incomplete-e2e", "gate_check", 1,
+                "--final", director, "--allow-incomplete-e2e", says="non-zero exit code (1)")
+    log_file.write_text("ENTRY_POINT: python -m demo\nTraceback (most recent call last):\nRuntimeError: boom\n",
+                        encoding="utf-8")
+    expect_tool("Traceback in E2E fails", "gate_check", 1, "--final", director,
+                says=["FAIL final", "failure marker"])
+    old_sha = "1" * 40
+    new_sha = "2" * 40
+    log_file.write_text(f"CANDIDATE_HEAD: {old_sha}\nENTRY_POINT: python -m demo\nEXIT_CODE: 0\n", encoding="utf-8")
+    expect_tool("historical E2E bound to another commit fails --candidate", "gate_check", 1,
+                "--final", director, "--candidate", new_sha,
+                says=["FAIL final", "ignored historical record run.txt", "has no matching end-to-end evidence"])
+    write(e2e / "new.txt", f"COMMIT: {new_sha}\nENTRY_POINT: python -m demo\nRESULT: PASS\n")
+    expect_tool("matching candidate E2E record passes", "gate_check", 0, "--final", director, "--candidate", new_sha,
+                says="OK   final", lacks="E2E_INCOMPLETE")
+    expect_tool("--allow-incomplete-e2e requires --final", "gate_check", 2, "--allow-incomplete-e2e",
+                says="--allow-incomplete-e2e works with --final")
+    return "incomplete/failed/traceback/allow-incomplete-e2e/candidate-binding"
+
+
+@test
+def usage_prompt_and_jsonl_267(tmp):
+    """2.6.0-ds.7 (A1, A2, A8): dsh_usage lastPromptTokens excludes outputTokens, --from-jsonl recomputes totals over a
+    stale projcache, and malformed usage fields emit warnings + partial flag (warned by gate_check --final)."""
+    dsh = load_tool("dsh_session")
+    node = dsh.find_node()
+    if not node:
+        raise Skip("no Node 22+ to write zstd fixture")
+    folder = tmp / "usage267"
+    cache = folder / "cache"
+    sessions = folder / "sessions"
+    cache.mkdir(parents=True)
+    sid = "session-11111111-1111-4111-8111-111111111111"
+    write(cache / f"{sid}.json", json.dumps({
+        "version": 7,
+        "record": {
+            "identity": {"formatVersion": 7, "createdAt": 1700000000000, "cwd": "X:/proj"},
+            "rows": {
+                "tokenUsage": {"val": {
+                    "totals": {"uncachedInputTokens": 100, "outputTokens": 50, "cacheReadTokens": 20, "cacheWriteTokens": 10},
+                    "last": {"turn": 1, "step": 1, "buckets": {
+                        "uncachedInputTokens": 500, "outputTokens": 200, "cacheReadTokens": 1000, "cacheWriteTokens": 50}},
+                }},
+                "sessionStats": {"val": {"turns": 1, "steps": 1}},
+                "modelSelection": {"val": {"lastUsed": {"model": "deepseek-flash", "provider": "deepseek-account",
+                                                        "reasoningEffort": "high"}}},
+            },
+        },
+    }))
+    header = json.dumps({"type": "session", "version": 4, "id": sid, "createdAt": 1700000000000,
+                         "cwd": "X:/proj", "delegationDepth": 0}) + "\n"
+    body = "".join(json.dumps(e) + "\n" for e in (
+        {"type": "turn/start", "seq": 1, "time": 1700000001000, "data": {}},
+        {"type": "step/start", "seq": 2, "time": 1700000001500, "data": {}},
+        {"type": "assistant/message", "seq": 3, "time": 1700000002000, "data": {
+            "turn": 1, "step": 1,
+            "usage": {"uncachedInputTokens": 700, "outputTokens": 300, "cacheReadTokens": 2000, "cacheWriteTokens": 100},
+        }},
+    ))
+    _write_zstd_jsonl(node, sessions / "--X-proj--" / sid / "session.v4.jsonl.zstd", [header, body])
+    raw_cache = expect_tool("A1 prompt-only from projcache buckets", "dsh_usage", 0,
+                            "--cache-root", cache, "--sessions-root", sessions, "--json")
+    data_cache = json.loads(raw_cache)
+    row_c = data_cache["sessions"][0]
+    require(row_c["lastPromptTokens"] == 1550 and row_c["input"] == 100 and row_c["output"] == 50
+            and row_c["source"] == "projcache" and not row_c["partial"],
+            f"projcache A1 mismatch: {row_c}")
+    raw_jsonl = expect_tool("A2 --from-jsonl recomputes over stale cache", "dsh_usage", 0,
+                            "--cache-root", cache, "--sessions-root", sessions, "--from-jsonl", "--json")
+    data_jsonl = json.loads(raw_jsonl)
+    row_j = data_jsonl["sessions"][0]
+    require(row_j["input"] == 700 and row_j["output"] == 300 and row_j["cacheRead"] == 2000
+            and row_j["cacheWrite"] == 100 and row_j["lastPromptTokens"] == 2800 and row_j["source"] == "jsonl",
+            f"jsonl A2 recompute mismatch: {row_j}")
+    # A8 invalid numeric field -> partial flag + warnings + gate_check WARN USAGE
+    bad_cache = folder / "bad_cache"
+    empty_s = folder / "empty_s"
+    bad_cache.mkdir()
+    empty_s.mkdir()
+    write(bad_cache / "session-22222222-2222-4222-8222-222222222222.json", json.dumps({
+        "version": 7,
+        "record": {
+            "identity": {"formatVersion": 7, "createdAt": 1700000000000, "cwd": "X:/proj"},
+            "rows": {
+                "tokenUsage": {"val": {
+                    "totals": {"uncachedInputTokens": "bad", "outputTokens": True, "cacheReadTokens": 10, "cacheWriteTokens": 0},
+                    "last": {"turn": 1, "step": 1, "buckets": {"uncachedInputTokens": -5, "outputTokens": 1,
+                                                               "cacheReadTokens": 0, "cacheWriteTokens": 0}},
+                }},
+            },
+        },
+    }))
+    director = folder / "DIRECTOR"
+    write(director / "evidence" / "E2E" / "run.txt", "ENTRY_POINT: python -m demo\nEXIT_CODE: 0\n")
+    write(director / "DECISION_REGISTER.md", FINAL225_REGISTER)
+    out_usage = director / "usage.json"
+    expect_tool("A8 invalid field produces PARTIAL warning and flag", "dsh_usage", 0,
+                "--cache-root", bad_cache, "--sessions-root", empty_s, "--out", out_usage,
+                says="WARN PARTIAL")
+    usage_obj = json.loads(out_usage.read_text(encoding="utf-8"))
+    require(usage_obj.get("partial") is True and usage_obj["sessions"][0]["partial"] is True
+            and usage_obj.get("warnings"), f"partial field missing: {usage_obj}")
+    expect_tool("gate_check --final warns on partial usage.json", "gate_check", 0, "--final", director,
+                says=["OK   final", "~ WARN USAGE:", "partial"])
+    return "A1 prompt-only=1550, A2 jsonl=2800, A8 partial+warnings"
+
+
+@test
+def bootstrap_worktree_267(tmp):
+    """2.6.0-ds.7 (A7): bootstrap_repo.py inside a linked git worktree writes .memsearch/ to the common info/exclude
+    so git status inside the worktree becomes clean."""
+    if shutil.which("git") is None:
+        raise Skip("git is not on PATH")
+    folder = tmp / "boot_wt_267"
+    main_repo = folder / "main"
+    wt_repo = folder / "wt"
+    main_repo.mkdir(parents=True)
+    git225(main_repo, "init", "-q", "-b", "main")
+    commit225(main_repo, "init", {"a.txt": "1\n"})
+    git225(main_repo, "worktree", "add", "-q", "-b", "w1", wt_repo)
+    try:
+        (wt_repo / ".memsearch").mkdir()
+        write(wt_repo / ".memsearch" / "idx.db", "data\n")
+        require(".memsearch/" in git225(wt_repo, "status", "--porcelain"), "expected untracked .memsearch/ before bootstrap")
+        expect_tool("bootstrap --check sees TODO in worktree", "bootstrap_repo", 1, "--repo", wt_repo, "--check",
+                    says="TODO")
+        expect_tool("bootstrap writes common exclude from worktree", "bootstrap_repo", 0, "--repo", wt_repo,
+                    says=["DONE  exclude:", "BOOTSTRAP_REPO: DONE"])
+        common_exclude = main_repo / ".git" / "info" / "exclude"
+        require(common_exclude.is_file() and ".memsearch/" in common_exclude.read_text(encoding="utf-8"),
+                "common info/exclude missing .memsearch/")
+        require(git225(wt_repo, "status", "--porcelain") == "",
+                "wt git status still dirty after bootstrap: " + git225(wt_repo, "status", "--porcelain"))
+        expect_tool("bootstrap rerun in worktree is OK", "bootstrap_repo", 0, "--repo", wt_repo,
+                    says=["OK    exclude:", "BOOTSTRAP_REPO: DONE"])
+    finally:
+        subprocess.run(["git", "-C", str(main_repo), "worktree", "remove", "--force", str(wt_repo)],
+                       capture_output=True, timeout=TIMEOUT)
+    return "linked worktree exclude -> common .git/info/exclude"
+
+
+@test
+def audit_prefilter_and_reads_267(tmp):
+    """2.6.0-ds.7 (A5, A6, B2): dsh_audit sorts roots before subagents, pre-filters via header/projection without
+    full-decoding unrelated or corrupt-body logs, and parses PowerShell/Windows read commands with unparsed counts."""
+    dsh = load_tool("dsh_session")
+    node = dsh.find_node()
+    if not node:
+        raise Skip("no Node 22+ to build zstd logs")
+    folder = tmp / "audit267"
+    logs = folder / "sessions"
+    cache = folder / "cache"
+    cache.mkdir(parents=True)
+    root_id = "session-aaaa0000-0000-4000-8000-000000000001"
+    child_id = "bbbb0000-0000-4000-8000-000000000002"
+    other_id = "session-cccc0000-0000-4000-8000-000000000003"
+    t0 = 1700000000000
+    _write_zstd_jsonl(node, logs / "--X-projA--" / root_id / "session.v4.jsonl.zstd", [
+        json.dumps({"type": "session", "version": 4, "id": root_id, "createdAt": t0, "cwd": "X:/projA",
+                    "delegationDepth": 0}) + "\n",
+        "".join(json.dumps(e) + "\n" for e in (
+            {"type": "subagent/catalog", "seq": 1, "time": t0 + 100,
+             "data": {"childId": child_id, "name": "worker-alpha", "label": "wA"}},
+            {"type": "tool/call", "seq": 2, "time": t0 + 200,
+             "data": {"callId": "r1", "name": "read", "arguments": json.dumps({"path": "a.py"})}},
+            {"type": "tool/result", "seq": 3, "time": t0 + 300,
+             "data": {"message": {"toolCallId": "r1", "isError": False, "content": [{"type": "text", "text": "ok"}]}}},
+        )),
+    ])
+    _write_zstd_jsonl(node, logs / "--X-projA--" / child_id / "session.v4.jsonl.zstd", [
+        json.dumps({"type": "session", "version": 4, "id": child_id, "createdAt": t0 + 1000, "cwd": "X:/projA",
+                    "origin": "subagent", "delegationDepth": 1, "parentSession": root_id}) + "\n",
+        "".join(json.dumps(e) + "\n" for e in (
+            {"type": "tool/call", "seq": 1, "time": t0 + 1100,
+             "data": {"callId": "c1", "name": "pwsh",
+                      "arguments": json.dumps({"command": "Set-Location X:\\projA; $env:X=1; Get-Content -Path C:\\projA\\src\\app.py -TotalCount 20"})}},
+            {"type": "tool/result", "seq": 2, "time": t0 + 1200,
+             "data": {"message": {"toolCallId": "c1", "isError": False, "content": [{"type": "text", "text": "body"}]}}},
+        )),
+    ])
+    other_path = logs / "--X-other--" / other_id / "session.v4.jsonl.zstd"
+    _write_zstd_jsonl(node, other_path, [
+        json.dumps({"type": "session", "version": 4, "id": other_id, "createdAt": t0, "cwd": "X:/other",
+                    "delegationDepth": 0}) + "\n",
+    ])
+    # Append corrupt zstd body frame after clean header: pre-filtering must never full-decode it!
+    with open(other_path, "ab") as handle:
+        handle.write(b"\x28\xb5\x2f\xfdGARBAGE")
+
+    audit_mod = load_tool("dsh_audit")
+    decoded = []
+    real_read_events = audit_mod.dsh.read_events
+
+    def tracked_read_events(p):
+        decoded.append(pathlib.Path(p).parent.name)
+        return real_read_events(p)
+
+    audit_mod.dsh.read_events = tracked_read_events
+    try:
+        out_a = folder / "audit_a.jsonl"
+        res_a = audit_mod.build(argparse.Namespace(
+            out=str(out_a), force=True, log_root=str(logs), cache_root=str(cache),
+            project_dir=["X:/projA"], since=None, until=None, session=[], input_limit=0))
+        require(decoded == [root_id, child_id], f"expected root-first [root, child] decode without other: {decoded}")
+        require(not res_a["warnings"] and any(s["agent_id"] == "worker-alpha" for s in res_a["sessions"]),
+                f"uncached root-first catalog failed: {res_a}")
+        # Populate projection for fast session pre-filter with zero extra root decodes
+        write(cache / f"{root_id}.json", json.dumps({"version": 7, "record": {
+            "identity": {"formatVersion": 7, "createdAt": t0, "cwd": "X:/projA"},
+            "rows": {"subagentCatalog": {"val": {"head": {"values": [{"childId": child_id, "name": "worker-alpha"}]}}}}}}))
+        write(cache / f"{child_id}.json", json.dumps({"version": 7, "record": {
+            "identity": {"formatVersion": 7, "createdAt": t0 + 1000, "cwd": "X:/projA"},
+            "rows": {"subagent": {"val": {"identity": {"mode": "fork", "label": "wA"}}}}}}))
+        write(cache / f"{other_id}.json", json.dumps({"version": 7, "record": {
+            "identity": {"formatVersion": 7, "createdAt": t0, "cwd": "X:/other"}, "rows": {}}}))
+        decoded.clear()
+        out_b = folder / "audit_b.jsonl"
+        audit_mod.build(argparse.Namespace(
+            out=str(out_b), force=True, log_root=str(logs), cache_root=str(cache),
+            project_dir=[], since=None, until=None, session=[child_id], input_limit=0))
+        require(decoded == [child_id], f"cached --session decoded extra logs: {decoded}")
+    finally:
+        audit_mod.dsh.read_events = real_read_events
+
+    # A6 Windows / PowerShell read_target + reads() unparsed count
+    rt = audit_mod.read_target
+    require(rt("PowerShell", {"command": "$env:TEMP='X:\\tmp'; Set-Location X:\\r; Get-Content -Path C:\\proj\\src\\file.py -TotalCount 20 -Encoding utf8"}) == r"C:\proj\src\file.py",
+            "Get-Content -Path + -Encoding + prelude")
+    require(rt("PowerShell", {"command": r"cd X:\r && gc .\notes.txt -Tail 5"}) == r".\notes.txt", "gc prelude + tail")
+    require(rt("PowerShell", {"command": r"cmd /c type src\a.txt"}) == r"src\a.txt", "cmd /c type")
+    bad_ev = write(folder / "bad_reads.jsonl", inject_events("session-fx-badreads", [
+        ("pwsh", {"command": r"Get-Content C:\proj\ok.py -TotalCount 10"}, "ok"),
+        ("pwsh", {"command": 'Get-Content "unclosed'}, "err"),
+    ]))
+    reads_res = audit_mod.reads(argparse.Namespace(events=[str(bad_ev)], top=20, session=[], project_dir=[], since=None, until=None))
+    require(reads_res["reads"] == 1 and reads_res["unparsed"] == 1 and reads_res["top"][0]["path"] == r"C:\proj\ok.py",
+            f"unexpected reads result: {reads_res}")
+    return "root-before-child, prefilter skips corrupt other, PS/Windows reads + unparsed=1"
+
+
+@test
+def node_version_and_doctor_267(tmp):
+    """2.6.0-ds.7 (A9 & doctor/setup improvements): probe_node checks major >= 22 and zstdDecompressSync,
+    DSH_NODE invalid executable fails dsh_doctor, read_profile isolates agent-default-model, danger-full-access + never
+    prints unconfined note, and dsh_setup_check validates loop_guard."""
+    dsh = load_tool("dsh_session")
+    doc = load_tool("dsh_doctor")
+    folder = tmp / "node_doc_267"
+    folder.mkdir()
+    real_run = dsh.subprocess.run
+    f18 = write(folder / "node18", "x")
+    f22no = write(folder / "node22no", "x")
+    f22ok = write(folder / "node22ok", "x")
+    responses = iter(["18.20.4|false\n", "22.0.0|false\n", "22.14.0|true\n"])
+
+    def fake_run(cmd, *a, **kw):
+        return subprocess.CompletedProcess(cmd, 0, next(responses), "")
+
+    dsh.subprocess.run = fake_run
+    try:
+        r18 = dsh.probe_node(f18)
+        r22no = dsh.probe_node(f22no)
+        r22ok = dsh.probe_node(f22ok)
+    finally:
+        dsh.subprocess.run = real_run
+    require(not r18["ok"] and "22+" in r18["reason"], f"expected Node 18 rejection: {r18}")
+    require(not r22no["ok"] and "zstdDecompressSync" in r22no["reason"], f"expected missing-zstd rejection: {r22no}")
+    require(r22ok["ok"] and r22ok["major"] == 22 and r22ok["has_zstd"], f"expected Node 22.14 accept: {r22ok}")
+    # Real subprocess via DSH_NODE=sys.executable fails node check cleanly
+    fake_home = folder / "home"
+    (fake_home / "sessions").mkdir(parents=True)
+    bad_doc = run_tool("dsh_doctor", env={"DSH_HOME": str(fake_home), "DSH_NODE": sys.executable})
+    require(bad_doc.returncode == 1 and "FAIL         node:" in text_of(bad_doc),
+            "expected FAIL node for non-Node DSH_NODE: " + tail(text_of(bad_doc)))
+    # Multi-plugin profile block isolation
+    prof = write(folder / "cordis.patch.yml", "\n".join([
+        "- id: llm-pi-ai", "  config:", "    provider: wrong-first", "    model: wrong-model",
+        "- id: agent-default-model", "  config:", "    provider: deepseek-account",
+        "    model: deepseek-flash", "    reasoningEffort: max",
+        "- id: ui-other", "  config:", "    reasoningEffort: low", "    model: decoy-last",
+    ]) + "\n")
+    vals = doc.read_profile(prof)
+    require(vals == {"provider": "deepseek-account", "model": "deepseek-flash", "reasoningEffort": "max"},
+            f"read_profile picked wrong block: {vals}")
+    cdir = folder / "cache"
+    cdir.mkdir()
+    write(cdir / "session-11111111-1111-4111-8111-111111111111.json", json.dumps({
+        "version": 7,
+        "record": {"rows": {"sandboxMode": {"val": "danger-full-access"}, "approvalState": {"val": {"policy": "never"}}}},
+    }))
+    pol_status, pol_detail = doc.check_session_policy(cdir)
+    require(pol_status == "OK" and "unconfined" in pol_detail, f"expected unconfined note: {pol_status} {pol_detail}")
+    # dsh_setup_check accepts loop_guard dict and rejects invalid loop_guard
+    d_ok = folder / "dir_ok"
+    director_fixture(d_ok)
+    write(d_ok / "RESUME_STATE.md",
+          "PROGRESS: setup checked\nDOING: nothing\nNEXT_STEP: wait for the PO\nCOMMS: NONE\n"
+          "UPDATED: 2026-11-24 09:00 +08:00\n\n# RESUME_STATE\n")
+    write(d_ok / "director_work.json", json.dumps({"schema_version": 1, "loop_guard": {"window": 10, "repeat": 4}}))
+    expect_tool("setup_check accepts loop_guard", "dsh_setup_check", 0, "--strict", d_ok, lacks="loop_guard")
+    d_bad = folder / "dir_bad"
+    director_fixture(d_bad)
+    write(d_bad / "RESUME_STATE.md",
+          "PROGRESS: setup checked\nDOING: nothing\nNEXT_STEP: wait for the PO\nCOMMS: NONE\n"
+          "UPDATED: 2026-11-24 09:00 +08:00\n\n# RESUME_STATE\n")
+    write(d_bad / "director_work.json", json.dumps({"schema_version": 1, "loop_guard": {"repeat": 1}}))
+    expect_tool("setup_check rejects invalid loop_guard", "dsh_setup_check", 1, "--strict", d_bad, says="loop_guard:")
+    return "Node >= 22 + zstd, DSH_NODE fail, profile isolation, unconfined note, setup loop_guard"
+
+
+@test
+def docs_budget_and_worktree_267(tmp):
+    """2.6.0-ds.7 (A10 & doc alignment): 4 must-read docs fit under 11,000 B LF, worktree-default wording agrees across
+    docs/11, WORK_ORDER, README and DEEPSEEK-PORT, BOOTSTRAP names docs/13 and DSH-TOOLS covers 2.6.0-ds.7."""
+    root = TOOLS.parent
+    expect_tool("4 must-read docs fit 11000 B cap", "memory_size_check", 0, "--chain",
+                root / "docs" / "01_roles_authority.md", root / "docs" / "03_communication.md",
+                root / "docs" / "06_resume_lossless.md", root / "docs" / "08_safety_rules.md",
+                "--max-bytes", "11000", says="CHAIN: PASS")
+    for rel in ("docs/11_dsh_operations.md", "templates/WORK_ORDER.md", "README.md", "DEEPSEEK-PORT.md"):
+        txt = (root / rel).read_text(encoding="utf-8")
+        require("--worker-worktree" in txt and "--shared" in txt, f"{rel} missing unified worktree/shared wording")
+    d11 = (root / "docs" / "11_dsh_operations.md").read_text(encoding="utf-8")
+    require("提示詞規則 vs 工具檢查 vs 硬防護" in d11, "docs/11 missing comparison table")
+    boot = (root / "BOOTSTRAP.md").read_text(encoding="utf-8")
+    for needle in ("docs/13_safety_gates.md", "DIRECTOR/research/", "ran_line.py", "--allow-incomplete-e2e"):
+        require(needle in boot, f"BOOTSTRAP.md missing {needle!r}")
+    require("DIRECTOR/研究" not in boot, "BOOTSTRAP.md still contains typo DIRECTOR/研究")
+    dsh_tools = (root / "tools" / "DSH-TOOLS.md").read_text(encoding="utf-8")
+    require("2.6.0-ds.7" in dsh_tools, "tools/DSH-TOOLS.md missing 2.6.0-ds.7 notes")
+    return "chain <= 11000 B, A10 worktree aligned, BOOTSTRAP + DSH-TOOLS updated"
 
 
 def main(argv=None):

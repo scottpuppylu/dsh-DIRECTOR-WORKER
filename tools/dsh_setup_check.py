@@ -72,7 +72,7 @@ CONFIG_VERSION = 1
 CONFIG_MODES = ("general", "beginner")
 CONFIG_PATTERNS = ("trace_id_pattern", "po_item_pattern", "po_open_pattern")
 CONFIG_KEYS = ("schema_version", "mode", "po_pending_files", "resume", "base_ref", "release", "order_limits",
-               "protected_tests", "safety", "verdict_self_check") + CONFIG_PATTERNS  # 2.3.0-ds.5: verdict_self_check
+               "protected_tests", "safety", "verdict_self_check", "loop_guard") + CONFIG_PATTERNS  # 2.3.0-ds.5: verdict_self_check
 LEGACY_KEYS = ("sdd",)  # renamed "safety" in 2.2.5-ds.5: read without error, WARN notes (safety_gate.legacy_notes)
 ORDER_LIMIT_KEYS = ("max_files_per_order", "max_lines_per_order", "max_test_lines_per_order")  # 2.2.4-ds.4
 RESUME_CONFIG_KEYS = ("max_bytes", "max_line_bytes", "keep_recent", "protect_headings")  # 2.2.2-ds.3
@@ -352,6 +352,16 @@ def config_blocks(data, notes):
                         say(f"release.gh_repo: owner/name or null, got {value!r}")
                 elif value is not None and not (isinstance(value, str) and value.strip()):
                     say(f"release.{key}: a non-empty string, got {value!r}")
+    if "loop_guard" in data:
+        block = data["loop_guard"]
+        if not isinstance(block, dict):
+            say(f"loop_guard: an object with loop_guard settings, got {block!r}")
+        else:
+            audit_mod = neighbour("dsh_audit")
+            try:
+                audit_mod.loop_config(block)
+            except audit_mod.LoopConfigError as error:
+                say(f"loop_guard: {error}")
     return problems
 
 
@@ -444,13 +454,14 @@ def target_folder(path):
 
 
 def main(argv=None):
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")  # before parse_args: --help prints during parsing
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("dirs", nargs="+", metavar="DIR", help="DIRECTOR folder (or its DIRECTOR_STATE.md)")
     ap.add_argument("--json", action="store_true", help="print the result as JSON instead of lines")
     ap.add_argument("--strict", action="store_true", help="the 2.2.1-ds.1 checks (PO IDs, RESUME values, "
                     "director_work.json keys) fail instead of printing shadow notes")
     a = ap.parse_args(argv)
-    sys.stdout.reconfigure(encoding="utf-8")
     results = []
     failed = 0
     for value in a.dirs:

@@ -44,6 +44,7 @@ import argparse
 import datetime
 import importlib.util
 import json
+import math
 import pathlib
 import re
 import sys
@@ -66,16 +67,51 @@ FALLBACK_KEYS = ("cwd", "createdAt", "model", "effort")
 
 
 def number(value):
-    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else 0
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0 else 0
+
+
+def read_number(value, field, invalid=None):
+    """Non-negative finite number -> value; None -> 0; anything else -> record invalid field and return 0."""
+    if value is None:
+        return 0
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0:
+        return value
+    if invalid is not None:
+        kind = "bool" if isinstance(value, bool) else type(value).__name__
+        invalid.append((field, f"{kind}({value!r})"[:40]))
+    return 0
+
+
+def read_usage(usage, prefix="", invalid=None):
+    """(input, output, cache_read, cache_write) from a DSH usage object; records invalid field types when `invalid` is given."""
+    if usage is None:
+        return (0, 0, 0, 0)
+    if not isinstance(usage, dict):
+        if invalid is not None:
+            invalid.append((prefix.rstrip(".") or "usage", type(usage).__name__))
+        return (0, 0, 0, 0)
+    in_key = "uncachedInputTokens" if "uncachedInputTokens" in usage else "inputTokens"
+    return (read_number(usage.get(in_key), f"{prefix}{in_key}", invalid),
+            read_number(usage.get("outputTokens"), f"{prefix}outputTokens", invalid),
+            read_number(usage.get("cacheReadTokens"), f"{prefix}cacheReadTokens", invalid),
+            read_number(usage.get("cacheWriteTokens"), f"{prefix}cacheWriteTokens", invalid))
 
 
 def sum_usage(usage):
     """(input, output, cache_read, cache_write) from a DSH usage object; 0 for missing fields."""
-    usage = usage if isinstance(usage, dict) else {}
-    return (number(usage.get("uncachedInputTokens", usage.get("inputTokens"))),
-            number(usage.get("outputTokens")),
-            number(usage.get("cacheReadTokens")),
-            number(usage.get("cacheWriteTokens")))
+    return read_usage(usage)
+
+
+def prompt_tokens(usage, prefix="", invalid=None):
+    """Prompt-side tokens only (input + cacheRead + cacheWrite), excluding outputTokens."""
+    inp, _, cache_read, cache_write = read_usage(usage, prefix, invalid)
+    return inp + cache_read + cache_write
+
+
+def total_tokens(usage, prefix="", invalid=None):
+    """All billed tokens (input + output + cacheRead + cacheWrite)."""
+    inp, out, cache_read, cache_write = read_usage(usage, prefix, invalid)
+    return inp + out + cache_read + cache_write
 
 
 def human_tokens(count):
@@ -114,18 +150,30 @@ def row_from_projection(projection):
     if not isinstance(turns, int) or isinstance(turns, bool):
         turns = len(outline.get("turns") or []) if isinstance(outline, dict) else 0
     steps = stats.get("steps") if isinstance(stats.get("steps"), int) else 0
-    last_prompt = sum(sum_usage(buckets))
+    invalid = []
+    tot_in, tot_out, tot_cr, tot_cw = read_usage(totals, "totals.", invalid)
+    bucket_prompt = prompt_tokens(buckets, "last.", invalid)
+    pt_raw = pressure.get("pressureTokens") if isinstance(pressure, dict) else None
+    if pt_raw is not None:
+        if isinstance(pt_raw, (int, float)) and not isinstance(pt_raw, bool) and math.isfinite(pt_raw) and pt_raw >= 0:
+            last_prompt = pt_raw
+        else:
+            kind = "bool" if isinstance(pt_raw, bool) else type(pt_raw).__name__
+            invalid.append(("contextPressure.pressureTokens", f"{kind}({pt_raw!r})"[:40]))
+            last_prompt = bucket_prompt
+    else:
+        last_prompt = bucket_prompt
     return {
         "started_ms": identity.get("createdAt"),
         "cwd": identity.get("cwd") or projection.row("workingDirectory"),
         "title": projection.row("title"),
         "turns": turns,
         "steps": steps,
-        "input": sum_usage(totals)[0],
-        "output": sum_usage(totals)[1],
-        "cacheRead": sum_usage(totals)[2],
-        "cacheWrite": sum_usage(totals)[3],
-        "total": sum(sum_usage(totals)),
+        "input": tot_in,
+        "output": tot_out,
+        "cacheRead": tot_cr,
+        "cacheWrite": tot_cw,
+        "total": tot_in + tot_out + tot_cr + tot_cw,
         "lastPromptTokens": last_prompt,
         "lastTurn": last.get("turn") if isinstance(last, dict) else None,
         "lastStep": last.get("step") if isinstance(last, dict) else None,
@@ -140,17 +188,37 @@ def row_from_projection(projection):
         "lastActivityMs": (projection.row("timeContext") or {}).get("lastMessageTime")
         if isinstance(projection.row("timeContext"), dict) else None,
         "source": "projcache",
+        "partial": bool(invalid),
+        "invalid_fields": sorted({f for f, _ in invalid}),
+        "_invalid_details": invalid,
     }
 
 
+def _attempt_usage(data):
+    """Last usage dict inside an assistant/attempt stream, or None."""
+    stream = data.get("stream")
+    if not isinstance(stream, list):
+        return None
+    found = None
+    for item in stream:
+        if not isinstance(item, dict) or item.get("type") != "chunk":
+            continue
+        chunk = item.get("chunk")
+        if isinstance(chunk, dict) and chunk.get("type") == "usage" and "usage" in chunk:
+            found = chunk.get("usage")
+    return found
+
+
 def row_from_jsonl(ref, warnings):
-    """Usage fields rebuilt from the event log (needs Node); the fallback for a missing projection cache."""
+    """Usage fields rebuilt from the event log (needs Node); mirrors DSH tokenUsage projection."""
     events, noted = dsh.read_events(ref.path)
     warnings.extend(f"{ref.session_id}: {w}" for w in noted)
     header = dsh.session_header(events)
-    totals = {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}
     turns = 0
     steps = 0
+    attempt_seq = 0
+    step_slots = {}
+    invalid = []
     last_usage = None
     context_window = None
     model = effort = provider = title = None
@@ -163,21 +231,30 @@ def row_from_jsonl(ref, warnings):
             turns += 1
         elif kind == "step/start":
             steps += 1
+        elif kind == "llm/retry-started":
+            attempt_seq += 1
         elif kind == "assistant/message":
-            usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
-            last_usage = usage
-            values = sum_usage(usage)
-            totals["input"] += values[0]
-            totals["output"] += values[1]
-            totals["cacheRead"] += values[2]
-            totals["cacheWrite"] += values[3]
+            usage = data.get("usage")
             last_turn = data.get("turn")
             last_step = data.get("step")
             last_activity = event.get("time")
+            if usage is not None:
+                last_usage = usage
+                slot = (last_turn, last_step, attempt_seq) if isinstance(last_turn, int) and isinstance(last_step, int) else ("msg", len(step_slots))
+                step_slots[slot] = read_usage(usage, f"step({last_turn},{last_step}).", invalid)
             source = ((data.get("message") or {}).get("source") if isinstance(data.get("message"), dict) else None) or {}
             if isinstance(source, dict) and source.get("model"):
                 model = source["model"]
                 provider = source.get("provider") or provider
+        elif kind == "assistant/attempt":
+            usage = _attempt_usage(data)
+            if usage is not None:
+                t, s = data.get("turn"), data.get("step")
+                last_turn, last_step = t, s
+                last_activity = event.get("time")
+                last_usage = usage
+                slot = (t, s, attempt_seq) if isinstance(t, int) and isinstance(s, int) else ("att", len(step_slots))
+                step_slots[slot] = read_usage(usage, f"attempt({t},{s}).", invalid)
         elif kind == "request/context":
             context_window = data.get("contextWindow") or context_window
             model = data.get("model") or model
@@ -190,7 +267,15 @@ def row_from_jsonl(ref, warnings):
                 effort = config.get("reasoningEffort") or effort
         elif kind == "session/title":
             title = data.get("title") or title
-    last_prompt = sum(sum_usage(last_usage or {}))
+    tot_in = sum(v[0] for v in step_slots.values())
+    tot_out = sum(v[1] for v in step_slots.values())
+    tot_cr = sum(v[2] for v in step_slots.values())
+    tot_cw = sum(v[3] for v in step_slots.values())
+    last_prompt = prompt_tokens(last_usage, "last.")
+    for field_name, bad_val in invalid[:10]:
+        warnings.append(f"{ref.session_id}: invalid usage field {field_name}={bad_val}; counted as 0 (partial)")
+    if len(invalid) > 10:
+        warnings.append(f"{ref.session_id}: ... {len(invalid) - 10} more invalid usage field(s)")
     depth = header.get("delegationDepth", 0)
     role = "worker" if isinstance(depth, int) and depth > 0 or header.get("origin") == "subagent" else "director"
     return {
@@ -199,9 +284,9 @@ def row_from_jsonl(ref, warnings):
         "title": title,
         "turns": turns,
         "steps": steps,
-        "input": totals["input"], "output": totals["output"],
-        "cacheRead": totals["cacheRead"], "cacheWrite": totals["cacheWrite"],
-        "total": sum(totals.values()),
+        "input": tot_in, "output": tot_out,
+        "cacheRead": tot_cr, "cacheWrite": tot_cw,
+        "total": tot_in + tot_out + tot_cr + tot_cw,
         "lastPromptTokens": last_prompt,
         "lastTurn": last_turn, "lastStep": last_step,
         "contextWindow": context_window,
@@ -213,6 +298,8 @@ def row_from_jsonl(ref, warnings):
         "role_hint": role,
         "parent": header.get("parentSession"),
         "delegationDepth": depth if isinstance(depth, int) else None,
+        "partial": bool(invalid),
+        "invalid_fields": sorted({f for f, _ in invalid}),
     }
 
 
@@ -233,6 +320,30 @@ def enrich_from_header(row, ref, warnings):
     row["cwd_verified"] = header.get("cwd")
     row["source"] = row["source"] + "+header" if not row["source"].endswith("+header") else row["source"]
     return row
+
+
+def _projection_can_skip(session_id, projection, catalog, args, since, until, parents):
+    """True when projection already has deterministic metadata proving the session cannot match active filters."""
+    if projection is None or projection.error or not (args.session or args.project_dir or since or until):
+        return False
+    identity = projection.identity()
+    cwd = identity.get("cwd") or projection.row("workingDirectory")
+    started = identity.get("createdAt")
+    if args.project_dir and not cwd:
+        return False
+    if (since or until) and (not isinstance(started, (int, float)) or isinstance(started, bool)):
+        return False
+    role, _ = dsh.session_role(session_id, projection)
+    name, name_source = dsh.session_agent(session_id, role, catalog, projection)
+    if args.session and role == "unknown":
+        return False
+    probe = {"cwd": cwd, "started_ms": started, "agent": name, "agent_source": name_source}
+    if not in_filters(probe, args, session_id, since, until):
+        if cwd and args.project_dir and any(dsh.path_is_under(root, cwd) and not dsh.path_is_under(cwd, root)
+                                            for root in args.project_dir):
+            parents[cwd] = parents.get(cwd, 0) + 1
+        return True
+    return False
 
 
 def build_report(args):
@@ -267,6 +378,8 @@ def build_report(args):
     for session_id in sorted(set(projections) | set(session_files)):
         projection = projections.get(session_id)
         ref = session_files.get(session_id)
+        if _projection_can_skip(session_id, projection, catalog, args, since, until, parents):
+            continue
         row, row_warnings = build_row(args, session_id, projection, ref, catalog)
         warnings.extend(row_warnings)
         if row is None:
@@ -291,12 +404,26 @@ def build_row(args, session_id, projection, ref, catalog):
     """One output row, or (None, [warning]) when neither source can describe the session."""
     warnings = []
     row = None
-    if projection is not None and not projection.error:
+    if args.from_jsonl and ref is not None and not args.no_fallback:
+        try:
+            row = row_from_jsonl(ref, warnings)
+        except dsh.DshError as error:
+            if projection is None or projection.error:
+                return None, [f"{session_id}: event-log read failed ({error}) and no usable projection"]
+            warnings.append(f"{session_id}: --from-jsonl failed ({error}); using projection cache")
+    if row is not None:
+        if projection is not None and not projection.error:
+            proj_row = row_from_projection(projection)
+            for meta in ("sandbox", "approval", "surfaceTokens"):
+                if row.get(meta) is None:
+                    row[meta] = proj_row.get(meta)
+    elif projection is not None and not projection.error:
         row = row_from_projection(projection)
+        for field_name, bad_val in (row.pop("_invalid_details", None) or [])[:10]:
+            warnings.append(f"{session_id}: invalid usage field {field_name}={bad_val}; counted as 0 (partial)")
         missing = not row.get("cwd") or not row.get("started_ms") or row.get("turns") in (None, 0) and row.get("total") == 0
-        needs_header = args.from_jsonl or missing
-        if needs_header and ref is not None and not args.no_fallback:
-            if row.get("total") == 0 and row.get("steps") == 0 and not args.from_jsonl:
+        if missing and ref is not None and not args.no_fallback:
+            if row.get("total") == 0 and row.get("steps") == 0:
                 try:
                     row = row_from_jsonl(ref, warnings)
                 except dsh.DshError as error:
@@ -317,6 +444,7 @@ def build_row(args, session_id, projection, ref, catalog):
         if args.no_fallback:
             return None, [f"{session_id}: only an event log exists and --no-fallback was given"]
         return None, [f"{session_id}: no event log and no projection"]
+    row.pop("_invalid_details", None)
     role, evidence = dsh.session_role(session_id, projection)
     if row.get("role_hint"):
         role, evidence = row["role_hint"], "event-log-header"
@@ -363,6 +491,8 @@ def build_row(args, session_id, projection, ref, catalog):
         "approval": row.get("approval"),
         "agentPreset": row.get("agentPreset"),
         "source": row.get("source"),
+        "partial": bool(row.get("partial")),
+        "invalid_fields": row.get("invalid_fields") or [],
         "log_file": str(ref.path) if ref is not None else None,
         "cache_file": str(projection.path) if projection is not None else None,
     }, warnings
@@ -406,7 +536,8 @@ def make_report(rows, warnings, args, cache_root, sessions_root, projections, se
             if isinstance(row.get(field), (int, float)) and not isinstance(row.get(field), bool):
                 day[field] += row[field]
     totals = {"sessions": len(rows), "turns": 0, "steps": 0, "input": 0, "output": 0,
-              "cacheRead": 0, "cacheWrite": 0, "total": 0}
+              "cacheRead": 0, "cacheWrite": 0, "total": 0,
+              "partial": any(row.get("partial") for row in rows)}
     for row in rows:
         for field in ("turns", "steps", "input", "output", "cacheRead", "cacheWrite", "total"):
             if isinstance(row.get(field), (int, float)) and not isinstance(row.get(field), bool):
@@ -415,6 +546,7 @@ def make_report(rows, warnings, args, cache_root, sessions_root, projections, se
         "tool": TOOL,
         "version": REPORT_VERSION,
         "generated_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+        "partial": totals["partial"],
         "source": {
             "sessions_root": str(sessions_root),
             "sessions_root_readable": sessions_root.is_dir(),
@@ -490,6 +622,8 @@ def render_text(report):
                  f"{human_tokens(totals['cacheWrite']):>8} {human_tokens(totals['total']):>8}")
     if report.get("loops"):
         lines.append(report["loops"]["line"])
+    if report.get("partial"):
+        lines.append("WARN PARTIAL: invalid usage field(s) encountered and treated as 0; see warnings / --json")
     if report["warnings"]:
         lines.append(f"WARNINGS {len(report['warnings'])}")
         for warning in report["warnings"][:10]:
@@ -557,6 +691,7 @@ def write_no_data(args, reason, warnings):
 
 
 def main(argv=None):
+    sys.stdout.reconfigure(encoding="utf-8")  # before parse_args: --help prints during parsing
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--sessions-root", help="DSH sessions root (default %%USERPROFILE%%\\.dsh\\sessions)")
     ap.add_argument("--cache-root", help="DSH projection cache root (default <DSH_HOME>/storages/session_projcache/sessions)")
@@ -577,11 +712,10 @@ def main(argv=None):
     ap.add_argument("--loops-config", help="loops config JSON for --loops (thresholds, allow list)")
     fallback = ap.add_mutually_exclusive_group()
     fallback.add_argument("--from-jsonl", action="store_true",
-                          help="confirm roles/lineage from the event-log headers (needs Node)")
+                          help="recompute usage totals and lineage from the event logs instead of the projection cache (needs Node)")
     fallback.add_argument("--no-fallback", action="store_true",
                           help="never read the event logs; the projection cache only (no Node)")
     a = ap.parse_args(argv)
-    sys.stdout.reconfigure(encoding="utf-8")
     effort_order_text = effort_order_id = None
     if a.effort_check:
         order_path = pathlib.Path(a.effort_check)

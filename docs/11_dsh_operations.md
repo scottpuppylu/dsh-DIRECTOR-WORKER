@@ -10,8 +10,18 @@
 - 同一棵樹最多 8 個作用中子代理、委派深度 1（worker 不能再開子代理）；這兩個上限在 DSH「設定 → 子代理」。
 - 總監必須是**根 session**：DSH 只讓根代理使用 `ask_user_question`、排程與 goal/plan 權限；被開成子代理的「總監」會直接被拒。
 - Team 模式（`team_task_*` 共享工作板）預設關閉，可以由 PO 在 model menu 開啟；本版只把它當輔助，工單與狀態檔案才是真相來源。
-- **所有子代理共享同一個 checkout 與檔案系統**（不是各自隔離的 worktree），一個子代理改了檔，其他人和總監立刻看得到；DSH 這個 profile 沒有 worktree 工具。Single Writer 靠檔案歸屬＋工單範圍＋總監最後看 diff。
+- **預設隔離方式為每個 worker 各自建 git worktree**：DSH 內建沒有 worktree 工具，開 worker 前一律跑 `tools/dsh_session.py --worker-worktree` 建獨立 worktree（並用 `tools/bootstrap_repo.py` 寫進共用 `info/exclude`）再將 `subagent` 的 `cwd` 指過去；只有在工單明寫 `WORKTREE = 共用 checkout` 時才共用同一工作區，此時靠 `scope_check.py --shared`＋Single Writer 檔案歸屬＋總監看 diff 把關。
 - 工具名稱會隨 DSH 版本變。下面的名稱是 0.2.2 桌面版；找不到時用能力關鍵字在工具清單找，不要猜。
+
+### 提示詞規則 vs 工具檢查 vs 硬防護
+
+DSH **沒有 PreToolUse／PostToolUse hook**，各類限制依賴不同層級，不可把提示詞或事後檢查誤認成執行前硬擋：
+
+| 層級 | 在 dshdw 涵蓋的事 | 實際效果 |
+|---|---|---|
+| DSH 平台硬防護 | 沙箱模式（`read-only / workspace-write / danger-full-access`）、核准政策（session 級）、`ask_user_question`／排程拒絕委派子代理 | 檔案寫入邊界與角色權限；若設為 `danger-full-access + never` 則無執行前阻擋 |
+| CLI 事後／閘門檢查 | `scope_check.py --candidate`、`gate_check.py`（`--order/--match/--verdict/--final`）、`safety_gate.py`、`dsh_audit.py`、`report_vs_audit.py`、`dsh_guard.py`（手動） | 交件與驗收時揭露違規、鎖測變更、E2E 未完成與未記載指令；不能事前攔下操作 |
+| 提示詞與規則 | 工單 `SCOPE / FORBIDDEN`、PLAN 核准、停工線、不自行 push/merge/刪檔 | 引導模型行為，須配合上兩層互驗 |
 
 ## 能力對照
 

@@ -346,11 +346,79 @@ def session_files(args, warnings):
     return sessions, projections, dsh.agent_catalog(projections)
 
 
+def _matches_meta_project_and_time(args, cwd, created_ms, have_meta, per_call=False):
+    """Cheap pre-filter on project_dir and date range when projection or header metadata is known."""
+    if not have_meta:
+        return True
+    if args.project_dir:
+        if not cwd or not any(dsh.path_is_under(cwd, root) for root in args.project_dir):
+            return False
+    if per_call:
+        if args.until and isinstance(created_ms, (int, float)) and not isinstance(created_ms, bool):
+            if datetime.datetime.fromtimestamp(created_ms / 1000.0).astimezone() >= dsh.parse_day(args.until, end=True):
+                return False
+        return True
+    if args.since or args.until:
+        if not isinstance(created_ms, (int, float)) or isinstance(created_ms, bool):
+            return False
+        when = datetime.datetime.fromtimestamp(created_ms / 1000.0).astimezone()
+        if args.since and when < dsh.parse_day(args.since):
+            return False
+        if args.until and when >= dsh.parse_day(args.until, end=True):
+            return False
+    return True
+
+
 def selected_sessions(args, sessions, projections, catalog, warnings, skipped, by_calls=False):
     """Yield (index, ref, events, header_id, agent_id, role, name_source, cwd, created_ms, parent) for each session
-    that passes the filters, in build's order (subagents first, then roots; the catalog fills as it goes)."""
-    for index, ref in enumerate(sorted(sessions, key=lambda item: (item.session_id.startswith(dsh.ROOT_PREFIX),
-                                                                   item.session_id))):
+    that passes the filters, roots before subagents so uncached subagent/catalog events enrich child names first."""
+    ordered = sorted(sessions, key=lambda item: (not item.session_id.startswith(dsh.ROOT_PREFIX), item.session_id))
+    has_filters = bool(args.session or args.project_dir or args.since or args.until)
+    has_subagents = any(not item.session_id.startswith(dsh.ROOT_PREFIX) for item in ordered)
+    hdr_map = {}
+    if has_filters:
+        need_header = []
+        for ref in ordered:
+            proj = projections.get(ref.session_id)
+            if proj is None or not proj.record:
+                need_header.append(ref.path)
+                continue
+            ident = proj.identity()
+            if args.project_dir and not ident.get("cwd"):
+                need_header.append(ref.path)
+            elif (args.since or args.until) and not isinstance(ident.get("createdAt"), (int, float)):
+                need_header.append(ref.path)
+        if need_header:
+            hdr_map = dsh.decode_headers(need_header)
+    for index, ref in enumerate(ordered):
+        if has_filters:
+            proj = projections.get(ref.session_id)
+            hdr, _ = hdr_map.get(str(ref.path), (None, []))
+            have_meta = bool((proj and proj.record) or isinstance(hdr, dict))
+            ident = proj.identity() if (proj and proj.record) else {}
+            cid = (hdr.get("id") if isinstance(hdr, dict) and isinstance(hdr.get("id"), str) and hdr.get("id")
+                   else None) or ref.session_id
+            mcwd = ident.get("cwd") if isinstance(ident.get("cwd"), str) and ident.get("cwd") else (
+                hdr.get("cwd") if isinstance(hdr, dict) else None)
+            mms = ident.get("createdAt") if (isinstance(ident.get("createdAt"), (int, float))
+                                             and not isinstance(ident.get("createdAt"), bool)) else (
+                hdr.get("createdAt") if isinstance(hdr, dict) else None)
+            if not _matches_meta_project_and_time(args, mcwd, mms, have_meta, by_calls):
+                continue
+            if args.session and have_meta:
+                if isinstance(hdr, dict):
+                    depth = hdr.get("delegationDepth")
+                    worker = hdr.get("origin") == "subagent" or (isinstance(depth, int) and depth > 0)
+                elif proj and proj.record:
+                    worker = dsh.session_role(cid, proj)[0] == "worker"
+                else:
+                    worker = not cid.startswith(dsh.ROOT_PREFIX)
+                mrole = "worker" if worker else "director"
+                magent, _ = dsh.session_agent(cid, mrole, catalog, proj)
+                if not matches_session(args, cid, mcwd, mms, magent, catalog, by_calls):
+                    # An uncached root may hold subagent/catalog events needed to match subagents by name.
+                    if worker or (proj and proj.record) or not has_subagents:
+                        continue
         events, noted = dsh.read_events(ref.path)
         warnings.extend(f"{ref.session_id}: {note}" for note in noted)
         if not events:
@@ -1015,32 +1083,214 @@ def cmd_inject(args):
 
 SHELL_READ = {"cat", "head", "tail", "less", "more", "type", "get-content", "gc", "bat"}
 READ_TOOLS = ("read",)  # DSH's file read tool: arguments {"path": ...}
+_PS_ARG_FLAGS = {"-totalcount", "-first", "-last", "-tail", "-head", "-encoding", "-delimiter",
+                 "-readcount", "-filter", "-include", "-exclude", "-stream"}
+_PS_PATH_FLAGS = {"-path", "-literalpath"}
+_PRELUDE_PROGS = {"cd", "set-location", "sl", "pushd", "push-location", "chdir"}
+_ENV_ASSIGN_RE = re.compile(r"^(?:\$env:[A-Za-z_][A-Za-z0-9_]*|[A-Za-z_][A-Za-z0-9_]*)=(.*)$")
 
 
-def read_target(name, arguments):
-    """2.5.0-ds.6 (DW 2.5.0 N5, usage_mix --reads): the path one DSH tool call reads, or None. The read tool's path;
-    for a shell call (pwsh / bash, `command`), the first piece (before a pipe or chain) when it is cat / head / tail /
-    sed -n / Get-Content: its last argument that is not an option or a number."""
-    arguments = arguments if isinstance(arguments, dict) else {}
-    if name in READ_TOOLS:
-        target = arguments.get("path") or arguments.get("file_path")
-        return target if isinstance(target, str) and target else None
-    if name not in ("Bash", "PowerShell"):
-        return None
-    first = re.split(r"\|\||&&|[|;\n]", str(arguments.get("command", "")), maxsplit=1)[0]
-    try:
-        words = shlex.split(first, posix=True)
-    except ValueError:
-        return None
+def _split_clauses(text):
+    """Split shell command into sequential statements on ;, &&, ||, newline outside quotes."""
+    clauses = []
+    buf = []
+    quote = None
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if quote:
+            buf.append(ch)
+            if ch == "\\" and quote == '"' and i + 1 < n:
+                i += 1
+                buf.append(text[i])
+            elif ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            buf.append(ch)
+            i += 1
+            continue
+        if ch in (";", "\n", "\r") or text[i:i + 2] in ("&&", "||"):
+            seg = "".join(buf).strip()
+            if seg:
+                clauses.append(seg)
+            buf = []
+            i += 2 if text[i:i + 2] in ("&&", "||") else 1
+            continue
+        buf.append(ch)
+        i += 1
+    seg = "".join(buf).strip()
+    if seg:
+        clauses.append(seg)
+    return clauses
+
+
+def _first_pipeline_stage(text):
+    """Return the first command in a pipeline (before an unquoted single |)."""
+    buf = []
+    quote = None
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if quote:
+            buf.append(ch)
+            if ch == "\\" and quote == '"' and i + 1 < n:
+                i += 1
+                buf.append(text[i])
+            elif ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            buf.append(ch)
+            i += 1
+            continue
+        if ch == "|":
+            break
+        buf.append(ch)
+        i += 1
+    return "".join(buf).strip()
+
+
+def _unquote(token):
+    if len(token) >= 2 and token[0] == token[-1] and token[0] in ("'", '"'):
+        return token[1:-1]
+    return token
+
+
+def _split_words(segment, prefer_nonposix):
+    use_nonposix = prefer_nonposix or ("\\" in segment) or bool(re.search(r"[A-Za-z]:[\\/]", segment))
+    words = shlex.split(segment, posix=not use_nonposix)
+    return [_unquote(w) for w in words]
+
+
+def _unwrap_subshell(words):
+    """Unwrap cmd /c ..., pwsh -Command ..., Set-Location/env preludes; return stripped word list."""
+    while words and _ENV_ASSIGN_RE.match(words[0]):
+        words = words[1:]
+    if not words:
+        return []
+    prog = words[0].replace("\\", "/").rsplit("/", 1)[-1].lower()
+    if prog.endswith(".exe"):
+        prog = prog[:-4]
+    if prog in ("cmd",) and len(words) >= 3 and words[1].lower() in ("/c", "/k"):
+        return words[2:]
+    if prog in ("pwsh", "powershell", "bash", "sh"):
+        idx = 1
+        while idx < len(words):
+            w = words[idx].lower()
+            if w in ("-c", "-command", "/c"):
+                return words[idx + 1:]
+            if w.startswith("-"):
+                if w in ("-executionpolicy", "-outputformat", "-inputformat") and idx + 1 < len(words):
+                    idx += 2
+                else:
+                    idx += 1
+                continue
+            break
+    return words
+
+
+def _extract_from_words(words, prefer_nonposix):
     if not words:
         return None
-    prog = os.path.basename(words[0]).lower()
+    words = _unwrap_subshell(words)
+    if len(words) == 1 and any(sep in words[0] for sep in (";", "&&", "||", "|", "\n")):
+        return _extract_from_command(words[0], prefer_nonposix)
+    if not words:
+        return None
+    prog = words[0].replace("\\", "/").rsplit("/", 1)[-1].lower()
+    if prog.endswith(".exe"):
+        prog = prog[:-4]
     if prog not in SHELL_READ and not (prog == "sed" and "-n" in words):
         return None
+    if prog in ("get-content", "gc"):
+        ps_paths = []
+        filtered = []
+        skip_next = False
+        expect_path = False
+        for w in words[1:]:
+            if skip_next:
+                skip_next = False
+                continue
+            if expect_path:
+                ps_paths.append(w)
+                expect_path = False
+                continue
+            low = w.lower()
+            if low in _PS_PATH_FLAGS:
+                expect_path = True
+                continue
+            if low.startswith("-path:") or low.startswith("-literalpath:"):
+                val = w.split(":", 1)[1]
+                if val:
+                    ps_paths.append(val)
+                continue
+            if low in _PS_ARG_FLAGS:
+                skip_next = True
+                continue
+            filtered.append(w)
+        rest = [w for w in filtered if not w.startswith("-") and not w.isdigit()]
+        if ps_paths:
+            return ps_paths[-1]
+        return rest[-1] if rest else None
     rest = [w for w in words[1:] if not w.startswith("-") and not w.isdigit()]
     if prog == "sed":
         rest = rest[1:]  # the sed script comes first
     return rest[-1] if rest else None
+
+
+def _extract_from_command(command_text, prefer_nonposix):
+    clauses = _split_clauses(command_text)
+    for clause in clauses:
+        stage = _first_pipeline_stage(clause)
+        if not stage:
+            continue
+        words = _split_words(stage, prefer_nonposix)
+        if not words:
+            continue
+        while words and _ENV_ASSIGN_RE.match(words[0]):
+            words = words[1:]
+        if not words:
+            continue
+        # Handle PowerShell "$env:FOO = 'bar'" separated around '='
+        if len(words) >= 2 and words[0].lower().startswith("$env:") and words[1].startswith("="):
+            continue
+        prog = words[0].replace("\\", "/").rsplit("/", 1)[-1].lower()
+        if prog.endswith(".exe"):
+            prog = prog[:-4]
+        if prog in _PRELUDE_PROGS:
+            continue
+        return _extract_from_words(words, prefer_nonposix)
+    return None
+
+
+def _read_target_info(name, arguments):
+    """Return (target_path_or_None, unparsed_bool) for one DSH tool call."""
+    arguments = arguments if isinstance(arguments, dict) else {}
+    if name in READ_TOOLS:
+        target = arguments.get("path") or arguments.get("file_path")
+        return (target if isinstance(target, str) and target else None), False
+    if name not in ("Bash", "PowerShell"):
+        return None, False
+    cmd = str(arguments.get("command", ""))
+    try:
+        return _extract_from_command(cmd, prefer_nonposix=(name == "PowerShell")), False
+    except ValueError:
+        return None, True
+
+
+def read_target(name, arguments):
+    """2.5.0-ds.6 (DW 2.5.0 N5, usage_mix --reads): the path one DSH tool call reads, or None. The read tool's path;
+    for a shell call (pwsh / bash, `command`), skips env/cd preludes and handles Windows/PowerShell paths and
+    Get-Content parameters when it is cat / head / tail / sed -n / Get-Content."""
+    target, _ = _read_target_info(name, arguments)
+    return target
 
 
 def output_bytes(output):
@@ -1070,7 +1320,7 @@ def reads(args):
     warnings, skipped = [], []
     selected = event_sources(args, warnings, skipped, by_calls=True)
     since, until = call_window(args)
-    count, size, seen, sessions, total, read_calls = {}, {}, set(), 0, 0, 0
+    count, size, seen, sessions, total, read_calls, unparsed = {}, {}, set(), 0, 0, 0, 0
     for header_id, agent_id, events in selected:
         arguments = raw_arguments(events)
         mine = 0
@@ -1084,7 +1334,9 @@ def reads(args):
                 continue
             seen.add(same)
             total += 1
-            target = read_target(entry["tool"], arguments.get(entry["tool_use_id"]))
+            target, bad = _read_target_info(entry["tool"], arguments.get(entry["tool_use_id"]))
+            if bad:
+                unparsed += 1
             if target:
                 read_calls += 1
                 count[target] = count.get(target, 0) + 1
@@ -1093,7 +1345,7 @@ def reads(args):
             sessions += 1
     rows = sorted(count, key=lambda p: (-count[p], -size[p], p))[:args.top]
     return {"tool": TOOL, "command": "reads", "sessions": sessions, "calls": total, "reads": read_calls,
-            "paths": len(count), "cost": "NOT_VERIFIED",
+            "paths": len(count), "unparsed": unparsed, "cost": "NOT_VERIFIED",
             "top": [{"path": p, "reads": count[p], "bytes": size[p]} for p in rows],
             "warnings": warnings, "skipped": skipped}
 
@@ -1118,7 +1370,7 @@ def cmd_reads(args):
     for row in result["top"]:
         print(f"READS {row['reads']:>5}x {human_bytes(row['bytes']):>8} {row['path']}")
     print(f"DSH_READS sessions={result['sessions']} calls={result['calls']} reads={result['reads']} "
-          f"paths={result['paths']} (prints paths: keep this output local)")
+          f"paths={result['paths']} unparsed={result['unparsed']} (prints paths: keep this output local)")
     for warning in result["warnings"][:8]:
         print(f"  ~ {warning}")
     return 0

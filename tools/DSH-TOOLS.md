@@ -168,6 +168,26 @@ error; it only reads (git grep -F -i -I) and never deletes.
 round_check.py as upstream 2.5.0 (N2): from SET 2 on a study section needs DIAGNOSIS_BY (not the IMPLEMENTER) and
 DIAGNOSIS_RESULT, else `~ WARN NO_INDEPENDENT_DIAGNOSIS` (exit unchanged).
 
+2.6.0-ds.6 (upstream DW 2.6.0): docs/07 adds ruler-first, plan-vs-code, simulation clock and unique coverage
+gates (supported by `ruler_check.py` and `run_plan_check.py`); docs/04 adds numeric go conditions and `waiver.py
+snooze --to` at wrap-up; docs/06b adds non-tracked inputs and `MISSING_INPUT`; `templates/TEST_REQUEST.md` adds
+`CODE_REFS:`.
+
+2.6.0-ds.7 (dshdw defect fixes & hardening):
+- `scope_check.py --candidate <SHA>` diffs `since..candidate` even on a clean worktree for `FORBIDDEN` / `OUTSIDE` /
+  `PROTECTED`, and `gate_check.py --match --candidate <SHA>` checks `TESTS_LOCKED` hashes against the candidate blob.
+- `gate_check.py --final` verifies completed E2E outcomes (`EXIT_CODE: 0` or `RESULT: PASS`, failure markers -> FAIL,
+  incomplete -> `E2E_INCOMPLETE` unless `--allow-incomplete-e2e`), optional `--candidate <40-hex>` E2E commit binding,
+  and warns on `partial` `usage.json`.
+- `dsh_usage.py` reports prompt-only `lastPromptTokens` (`input + cacheRead + cacheWrite`, matching `pressureTokens`),
+  truly recomputes totals on `--from-jsonl`, and flags invalid token field types as `partial` with warnings.
+- `dsh_session.py` / `dsh_doctor.py` require Node >= 22 with `zlib.zstdDecompressSync`, send decoder paths via stdin JSON,
+  read 8 KB prefix in header mode, check `REQUIRED_TOOLS` (42), isolate `agent-default-model`, and note unconfined
+  `danger-full-access + never`. `dsh_setup_check.py` accepts and validates `loop_guard`.
+- `dsh_audit.py` sorts roots before subagents, pre-filters sessions from projection / header before full zstd decode,
+  parses Windows/PowerShell `Get-Content` chains in `reads`, and reports `"unparsed"`.
+- `bootstrap_repo.py` resolves `git rev-parse --git-path info/exclude` so linked worktrees write the common exclude.
+
 ## Removed Claude-only tools
 
 hook_guard.py (its rules survive in guard_rules.json), setup_project_settings.py, context_probe.py, usage_report.py,

@@ -36,6 +36,7 @@ import hashlib
 import json
 import pathlib
 import re
+import subprocess
 import sys
 
 DEFAULTS = {
@@ -185,9 +186,20 @@ def list_items(text, key):
     return None
 
 
+def bytes_hash(data):
+    """sha256 of bytes with CRLF read as LF, so line endings do not change it."""
+    return hashlib.sha256(data.replace(b"\r\n", b"\n")).hexdigest()
+
+
 def file_hash(path):
     """sha256 of a text file with CRLF read as LF, so a checkout's line endings do not change it."""
     return hashlib.sha256(pathlib.Path(path).read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+
+
+def _git_blob(repo, rev, rel_path):
+    """Bytes of rel_path at git revision rev, or None if unavailable."""
+    done = subprocess.run(["git", "-C", str(repo), "cat-file", "blob", f"{rev}:{rel_path}"], capture_output=True)
+    return done.stdout if done.returncode == 0 else None
 
 
 def plan_hash(path):
@@ -277,7 +289,7 @@ def switch_off_problems(config, gov, notes):
     return problems
 
 
-def check_tests(text, repo, problems, notes):
+def check_tests(text, repo, problems, notes, candidate=None):
     """TESTS_LOCKED: `- <path> sha256=<64 hex>` per acceptance test, written before dispatch. The lock is what stops a
     worker from editing a test until it passes."""
     items = list_items(text, "TESTS_LOCKED")
@@ -293,6 +305,15 @@ def check_tests(text, repo, problems, notes):
         if not m:
             problems.append(f"TESTS_LOCKED: `{item}` is not `<path> sha256=<64 hex>`")
             continue
+        if candidate:
+            rel = m.group(1).replace("\\", "/")
+            blob = _git_blob(repo, candidate, rel)
+            if blob is None:
+                problems.append(f"TESTS_LOCKED: {m.group(1)} not found in candidate {candidate[:12]} (deleted or missing)")
+            elif bytes_hash(blob) != m.group(2).lower():
+                problems.append(f"TESTS_LOCKED: {m.group(1)} changed in candidate {candidate[:12]} since it was locked; "
+                                "a worker may not edit the acceptance tests (report BLOCKED instead)")
+            continue
         path = pathlib.Path(repo) / m.group(1)
         if not path.is_file():
             problems.append(f"TESTS_LOCKED: {m.group(1)} not found under {pathlib.Path(repo).resolve()} (pass --repo)")
@@ -301,7 +322,7 @@ def check_tests(text, repo, problems, notes):
                             "acceptance tests (report BLOCKED instead)")
 
 
-def order_problems(text, order_path, repo, config, notes):
+def order_problems(text, order_path, repo, config, notes, candidate=None):
     """The safety gates for one work order (gate_check.py --order and --match)."""
     problems = []
     gov = governance(text)
@@ -312,7 +333,7 @@ def order_problems(text, order_path, repo, config, notes):
         return problems
     problems += switch_off_problems(config, gov, notes)
     if not is_off(config.get("tests_first")):
-        check_tests(text, repo, problems, notes)
+        check_tests(text, repo, problems, notes, candidate=candidate)
     limit = config.get("stop_after_rounds")
     stop = re.search(r"STOP_RULES\s*[:：=]\s*(.*)", text)
     if not is_off(limit) and stop:
