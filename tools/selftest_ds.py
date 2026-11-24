@@ -6706,7 +6706,7 @@ def main(argv=None):
         parser.error("no such test: " + ", ".join(unknown))
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    tmp = pathlib.Path(tempfile.mkdtemp(prefix="dw-selftest-"))
+    tmp = pathlib.Path(tempfile.mkdtemp(prefix="dw-selftest-")).resolve()
     passed = failed = skipped = 0
     try:
         for function in TESTS:

@@ -253,7 +253,7 @@ class RoundsTable(unittest.TestCase):
 
 class SettingsFromConfigAndOrder(unittest.TestCase):
     def setUp(self):
-        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="vdr-"))
+        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="vdr-")).resolve()
         self.proj, self.order, self.oracle, self.config = project(self.tmp)
 
     def tearDown(self):
@@ -293,7 +293,7 @@ class SyntheticRun(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.tmp = pathlib.Path(tempfile.mkdtemp(prefix="vdr-run-"))
+        cls.tmp = pathlib.Path(tempfile.mkdtemp(prefix="vdr-run-")).resolve()
         cls.proj, cls.order, cls.oracle, cls.config = project(cls.tmp)
 
     @classmethod
