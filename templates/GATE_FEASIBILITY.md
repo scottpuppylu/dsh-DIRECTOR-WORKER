@@ -1,4 +1,4 @@
-# GATE FEASIBILITY — <TASK_ID> <gate 名稱>（dshdw 2.5.0-ds.6，上游 DW 2.5.0）
+# GATE FEASIBILITY — <TASK_ID> <gate 名稱>（2.5.0）
 <YYYY-MM-DD HH:MM，用 ran_line.py --stamp 印，不手打>
 ORDER: <WO-檔名.md> REVISION <n>
 BASELINE: <試跑用的現況 commit，40 位>
@@ -18,7 +18,7 @@ CHECKED_BY: <寫這份的人；放寬量法那一節要另一個人>
 ## B. 放寬量法（沒有放寬就寫「無」）
 LOOSENED_RULE: <原本的量法 → 放寬後的量法>
 KNOWN_DEFECT: <一個已知有缺陷的樣本（路徑或 commit）>
-CHECKED_BY_OTHER: <不是放寬量法的人；換人，或另開一個只讀的子代理 session>
+CHECKED_BY_OTHER: <不是放寬量法的人；換人或換模型>
 RESULT: <放寬後的量法對 KNOWN_DEFECT 跑一次：仍然抓到 yes / 沒抓到 no + RAN 行>
 
 放寬後抓不到已知缺陷（`no`），或沒有 KNOWN_DEFECT 可以試，這個放寬就不能用。

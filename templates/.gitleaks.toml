@@ -1,17 +1,17 @@
-# SAMPLE ONLY (dsh-DIRECTOR-WORKER 2.4.0-ds.6, from DIRECTOR-WORK 2.4.0). dshdw does not need gitleaks (https://github.com/gitleaks/gitleaks,
+# SAMPLE ONLY (DIRECTOR-WORK 2.4.0). DIRECTOR-WORK does not need gitleaks (https://github.com/gitleaks/gitleaks,
 # MIT). If you already use it, copy this file to your repo root as .gitleaks.toml. tools/release.py runs gitleaks
-# when it is on PATH; without it dshdw's own patterns (tools/secret_mask.py) still run.
-# 範例檔：dshdw 不依賴 gitleaks。已經在用的話，複製到專案根目錄改名 .gitleaks.toml。
+# when it is on PATH; without it DW's own patterns (tools/secret_mask.py) still run.
+# 範例檔：DW 不依賴 gitleaks。已經在用的話，複製到專案根目錄改名 .gitleaks.toml。
 #
 # Written from the gitleaks README's config format; not run against a live gitleaks here (NOT_VERIFIED).
 
-title = "dsh-DIRECTOR-WORKER sample gitleaks config"
+title = "DIRECTOR-WORK sample gitleaks config"
 
 # Keep all of gitleaks' built-in rules and add the ones below.
 [extend]
 useDefault = true
 
-# Personal paths in committed text: a Windows or macOS home folder with a real user name. selftest_ds.py and
+# Personal paths in committed text: a Windows or macOS home folder with a real user name. The selftest and
 # release.py check the same thing; this rule makes gitleaks report it too.
 [[rules]]
 id = "dw-user-home-path"
@@ -22,7 +22,7 @@ keywords = ["users"]
 
 # Files that hold placeholders only. Add your own; never add a file that holds a real value.
 [allowlist]
-description = "dshdw placeholders and synthetic test values"
+description = "DW placeholders and synthetic test values"
 paths = [
   '''templates/.*\.md''',
 ]

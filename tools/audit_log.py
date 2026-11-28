@@ -1,7 +1,4 @@
-"""Hash-chained action log (JSONL) and the checks that read it. In the DeepSeek Harness edition nothing writes it
-in real time (DSH has no PreToolUse / PostToolUse hook): tools/dsh_audit.py reconstructs the same format from the session
-logs after the fact. The append subcommand stays for the Claude Code edition and is unused here; verify / head / cite /
-recover are still the checks the Director runs.
+"""Hash-chained action log (JSONL) that Claude Code hooks write, and the checks that read it.
 
   python -I -X utf8 audit_log.py append --log FILE      PostToolUse / PostToolUseFailure hook (stdin: the hook JSON)
   python -I -X utf8 audit_log.py verify --log FILE [--from N] [--to M] [--anchor-log LOG]
@@ -33,7 +30,8 @@ an anchor a missing copy prints a `~ warning` line). Lines after the first bad o
 only. A log with nothing broken is left as it is (exit 0); a missing log gives exit 2.
 
 verify recomputes the chain and prints the first break (BROKEN seq=n / BROKEN line=n) with exit 1; a missing log,
-anchor commit or file gives exit 2. A chain that was rewritten whole, every hash recomputed, passes on its own: only an
+anchor commit or file gives exit 2. 3.0.0 (G2): a log with no entries ends `EMPTY` with exit 1 (a log cut to nothing
+is empty too; an empty log proves nothing). A chain that was rewritten whole, every hash recomputed, passes on its own: only an
 anchor catches it. --anchor-log reads AUDIT_HEAD lines from a file; --anchor-rev reads them from DIRECTOR_LOG as
 committed (git show REV:PATH), so an edited working copy of the LOG does not help. Every AUDIT_HEAD line for this log
 (same absolute path) must still be on the chain with the same hash; none at all is a failure too. Lines added after
@@ -148,7 +146,7 @@ def text_of(value):
 def summary(tool_input, limit=INPUT_LIMIT):
     # mask each string first, then serialize (F12): masking the JSON text missed a quoted secret whose quotes JSON
     # escapes. No second pass over the JSON: it would turn `"secret_mode": false` into text that is not JSON.
-    # 2.2.5: limit=None keeps the whole input (dsh_audit.py build; upstream transcript_audit.py); a hook would cut at INPUT_LIMIT
+    # 2.2.5: limit=None keeps the whole input (transcript_audit.py build); the hook still cuts at INPUT_LIMIT
     text = text_of(MASK_TREE({} if tool_input is None else tool_input))
     return text if limit is None or len(text) <= limit else text[:max(limit, 2) - 1] + "…"
 
@@ -451,13 +449,16 @@ def cmd_verify(a):
     problems = list(dict.fromkeys(p for p in problems if p))
     for problem in problems:
         print(f"BROKEN {problem}")
+    empty = not entries and not problems  # 3.0.0 (G2): a log cut to nothing would verify too; an empty log proves nothing
+    if empty:
+        print("INVALID EMPTY: the log has no entries, so there is no chain to verify")
     head = entries[-1][1] if entries else {}
     print(f"AUDIT_VERIFY file={show(log)} entries={len(entries)} head_seq={head.get('seq', 0)}"
           f"{f' anchors={anchors}' if texts else ''}{f' gaps={len(found_gaps)}' if found_gaps else ''}"
-          f"{' cite=checked' if cite else ''} {'BROKEN' if problems else 'OK'}")
+          f"{' cite=checked' if cite else ''} {'BROKEN' if problems else 'EMPTY' if empty else 'OK'}")
     if bad or chain_problem(entries):
         print(f"  ~ to go on writing: audit_log.py recover --log {log} (keeps a copy, adds a recovery line)")
-    return 1 if problems else 0
+    return 1 if problems or empty else 0
 
 
 def cmd_head(a):

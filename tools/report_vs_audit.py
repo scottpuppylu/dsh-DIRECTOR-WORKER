@@ -24,10 +24,9 @@ with its startup flags (-I -X utf8 ...) are dropped from both sides, and the cla
 on a run of the log's words: "..." or "<name>" skips any number of words and a file name or path matches a longer path
 that ends with it; this word match needs at least 2 claim words that are not "..." / "<name>". The log does not hold
 exit codes: exit 0 must meet a "result" line with status ok, another exit a "failure" line. When at= is given the
-matching line must lie within --tolerance-min minutes of it. A log rebuilt after the fact (first line kind=rebuild,
-written by dsh_audit.py from the DSH session logs, or by upstream transcript_audit.py) is read the same way; a note says so.
-Wording, not a literal command, is enough in the DeepSeek Harness edition, where every PTC shell call is a PowerShell
-call that wraps the real command: that is what the launcher drop and the word match above are for.
+matching line must lie within --tolerance-min minutes of it. A log rebuilt from a transcript (first line
+kind=rebuild, written by transcript_audit.py or a variant's rebuilder such as dshdw's dsh_audit.py build, named in its
+source.by) is read the same way; a note says so and names the rebuilder (transcript_audit.py when source.by is missing).
 
 2.2.3: a new line, ;, && and || split a command into statements on both sides (the launcher is dropped in each), so a
 claim of several statements matches a multi-line script (heredoc, multi-line python -c, PowerShell here-string) that
@@ -45,7 +44,7 @@ the agent that ran its commands made its last commit after its last scope_check.
 agent in the session (X=v / export X=v, $x = 'v' / "v" / @'...'@ here-string, $env:X = v, set X=v) gives $X, ${X},
 $env:X and %X% their value; a variable with no value found (and a cut last word that starts with $) stands for any
 text inside its word. "git -C DIR x" is read as "cd DIR ; git x"; ； also ends a statement. Inside a word, "..." / "…"
-stands for any text (.../repo matches d:/w/repo, D:/.../x.py a longer path), a short hex word (7+) matches a longer
+stands for any text (.../repo matches <WS>/repo, <WS>/.../x.py a longer path), a short hex word (7+) matches a longer
 hex word that starts with it, an absolute claimed path matches a relative logged one it ends with, and a word between
 two CJK-only words is left out with them. at= takes HH:MM:SS and a span HH:MM–HH:MM (the span is added to the
 tolerance). A ``` fence opened before RAN: and closed after it is not a RAN block. A claim of several statements that
@@ -61,12 +60,12 @@ code, so a claimed exit other than 0 is "not checkable" there.
 match a statement that only sets TEMP / TMP / TMPDIR / PYTHONIOENCODING / PYTHONUTF8 (TEMP=x, export / set TEMP=x,
 $env:TEMP = 'x') is left out on both sides, and so are those assignments in front of a command (TEMP=x python ...,
 env TEMP=x ...). A log call's relative paths are also read against its folder: the input's "workdir" / "cwd" field and
-a cd / Set-Location / pushd earlier in the same call (tools/x.py run in D:/w/DIRECTOR is D:/w/DIRECTOR/tools/x.py, so
+a cd / Set-Location / pushd earlier in the same call (tools/x.py run in <WS>/DIRECTOR is <WS>/DIRECTOR/tools/x.py, so
 the claim DIRECTOR/tools/x.py matches); a word counts as a path when it holds a /, ends with a file extension, or is
 the value of an option named ...dir / path / file / repo / cwd / out / root / folder / log / report / order. A claim
 of one statement may leave out options the log statement has (OK with a note naming them), unless a left-out option
 can weaken the run (-f -n -k --force --warn --dry-run --no-... --skip... --allow... --ignore... --quick --only and the
-like). A log line rebuilt with "input_cut": true (dsh_audit.py build --input-limit; upstream transcript_audit.py) is a cut line. Each FAIL
+like). A log line rebuilt with "input_cut": true (transcript_audit.py build --input-limit) is a cut line. Each FAIL
 names its class (類別：沒跑 / 時間不符 / 結束碼不符 / 格式); a claim not run whose at= has a call starting with the same
 two words gets that call as a hint. --lead FILE (repeatable) checks files the lead writes itself (GATE_VERDICT,
 DIRECTOR_LOG): their RAN lines as claims, and every line that starts with a stamp YYYY-MM-DD HH:MM against the earliest
@@ -91,7 +90,7 @@ import re
 import subprocess
 import sys
 
-SHELL_TOOLS = frozenset(("bash", "powershell", "pwsh"))  # compared lower-case: DSH calls the tool pwsh
+SHELL_TOOLS = frozenset(("bash", "powershell", "pwsh"))  # compared lower-case
 LAUNCHER = re.compile(r"(?:^|/)(?:python(?:\d+(?:\.\d+)*)?|py|node|pwsh|powershell)(?:\.exe)?$", re.I)
 STARTUP = frozenset(("-i", "-x", "-u", "-b", "-e", "-s", "-o", "-oo", "-v", "-q", "utf8", "-utf8", "-noprofile",
                      "-noninteractive", "-nologo", "-noexit", "-command", "-commandwithargs", "-inputformat",
@@ -143,7 +142,7 @@ CLOCK = r"\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?"
 AT_SPAN = re.compile(rf"({CLOCK})\s*[–—~～〜-]\s*({CLOCK})")  # 2.2.5: full-width ～ / 〜
 NEUTRAL_ENV = frozenset(("temp", "tmp", "tmpdir", "pythonioencoding", "pythonutf8"))  # 2.2.5: left out before the match
 ENV_WORD = re.compile(r"^([a-z_]\w*)=\S*$")
-MSYS_DRIVE = re.compile(r"(^|=)/([a-z])/")  # 2.2.5: Git Bash /d/x is d:/x (after norm(): lower case)
+MSYS_DRIVE = re.compile(r"(^|=)/([a-z])/")  # 2.2.5: Git Bash /<c>/x is <c>:/x (after norm(): lower case)
 PS_ENV = re.compile(r"^\$env:(\w+)\s*=")
 PATH_OPTION = re.compile(r"^--?[\w-]*(?:dir|path|file|repo|cwd|out|root|folder|log|report|order)$")
 CD_WORDS = frozenset(("cd", "chdir", "pushd", "set-location", "sl"))
@@ -460,7 +459,7 @@ def prepare(mine):
 def canonical_command(command):
     """norm() with a leading & / ; / cmd /c and a python / node / pwsh launcher with its startup flags dropped; 2.2.3: in
     each statement, joined again by " ; ". 2.2.4: "git -C DIR x" is "cd DIR ; git x". 2.2.5: TEMP=x in front left out (drop_env), a
-    Git Bash drive path /d/x read as d:/x."""
+    Git Bash drive path /<c>/x read as <c>:/x."""
     statements = []
     for statement in norm(GIT_C.sub(lambda found: f"cd {found.group(1)} ; git ", command)).split(" ; "):
         parts = [part for part in statement.split(" ") if part]
@@ -581,7 +580,7 @@ def word_pattern(word):
 
 
 def same_word(claim_word, log_word):
-    """Equal, or the log word is a longer path that ends with the claim word (tools/x.py matches d:/w/tools/x.py).
+    """Equal, or the log word is a longer path that ends with the claim word (tools/x.py matches <WS>/tools/x.py).
     2.2.4: "..." / "…" / MARK inside either word is any text; a hex word of 7+ matches a longer hex word that starts
     with it; an absolute claimed path matches a relative logged path it ends with."""
     if loose_word(claim_word, log_word):
@@ -606,7 +605,7 @@ def loose_word(claim_word, log_word):
 def short_word(claim_word, log_word):
     """2.2.3, only for a claim that leaves parts out: "427fcef..." matches a word (or a file name) that starts with
     427fcef; a bare name of 3+ characters (wo-003) matches a file whose name starts with it and goes on with - _ or .
-    (d:/w/orders/wo-003-expression.md)."""
+    (<WS>/orders/wo-003-expression.md)."""
     base = log_word.rsplit("/", 1)[-1]
     found = ELLIPSIS_END.match(claim_word)
     if found:
@@ -1219,10 +1218,11 @@ def main(argv=None):
                   file=sys.stderr)
             return 2
     mine = [e for e in entries if session and e.get("session_id") == session]
-    rebuilt = sorted({str((e.get("source") or {}).get("by") or "?") for e in entries if e.get("kind") == "rebuild"})
-    if rebuilt:
-        print(f"  ~ note: a log was rebuilt after the fact ({', '.join(rebuilt)}), not written while the agent worked; "
-              "it shows what its source logs hold, not that nothing else was done")
+    rebuilders = sorted({str((e.get("source") if isinstance(e.get("source"), dict) else {}).get("by")
+                              or "transcript_audit.py") for e in entries if e.get("kind") == "rebuild"})
+    if rebuilders:
+        print(f"  ~ note: a log was rebuilt from a transcript after the fact (by {', '.join(rebuilders)}), not written "
+              "while the agent worked; it shows what the transcript holds, not that nothing else was done")
     failed, backing, classes = 0, [], collections.Counter()
     for problem in broken:
         print(f"FAIL log: hash chain {problem} (audit_log.py verify)")

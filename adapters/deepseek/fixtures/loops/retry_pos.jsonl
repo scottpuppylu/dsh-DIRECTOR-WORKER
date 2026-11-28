@@ -1,0 +1,7 @@
+{"createdAt": 1700000000000, "cwd": "/home/dw/fixture", "id": "session-fx-retry_pos", "seq": 0, "time": 1700000000000, "type": "session"}
+{"data": {"message": {"content": [{"text": "Updating the heading.", "type": "text"}]}}, "seq": 1, "time": 1700000001000, "type": "assistant/message"}
+{"data": {"arguments": {"new": "New heading", "old": "Old heading", "path": "docs/guide.md"}, "name": "edit", "subCallId": "s2"}, "seq": 2, "time": 1700000002000, "type": "tool/ptc-dispatch-start"}
+{"data": {"arguments": {"new": "New heading", "old": "Old heading", "path": "docs/guide.md"}, "content": [{"text": "anchor not found", "type": "text"}], "error": {"code": "FS_EDIT_NOT_FOUND", "name": "FsError"}, "isError": true, "name": "edit", "subCallId": "s2"}, "seq": 3, "time": 1700000003000, "type": "tool/ptc-dispatch"}
+{"data": {"message": {"content": [{"text": "thinking about it", "type": "reasoning"}]}}, "seq": 4, "time": 1700000004000, "type": "assistant/message"}
+{"data": {"arguments": {"new": "New heading", "old": "Old heading", "path": "docs/guide.md"}, "name": "edit", "subCallId": "s5"}, "seq": 5, "time": 1700000005000, "type": "tool/ptc-dispatch-start"}
+{"data": {"arguments": {"new": "New heading", "old": "Old heading", "path": "docs/guide.md"}, "content": [{"text": "anchor not found", "type": "text"}], "error": {"code": "FS_EDIT_NOT_FOUND", "name": "FsError"}, "isError": true, "name": "edit", "subCallId": "s5"}, "seq": 6, "time": 1700000006000, "type": "tool/ptc-dispatch"}

@@ -1,0 +1,38 @@
+{
+ "_comment": "adapters/deepseek/verify_dsh_run.py config for one DSH trial run of a work order (2.2.2-ds.3). Paths are relative to this file. Only project_dir, repo, order and code_files are required; the others show their defaults or an example.",
+ "project_dir": "<the folder DSH ran in, e.g. ../dsh-run>",
+ "repo": "<the project's git repo, e.g. ../dsh-run/demo>",
+ "order": "<the work order, e.g. ../dsh-run/DIRECTOR/orders/WO-101-clamp.md>",
+ "_comment_defaults": "order_id = the WO-<n> at the start of the order file name; report / log / verdict / summary / evidence_dir / director_config / run_base default to <DIRECTOR>/reports/<WO>_TASK_REPORT.md, DIRECTOR_LOG.md, reviews/<WO>_GATE_VERDICT.md, reports/RUN_SUMMARY.md (null = not required), evidence/, director_work.json, RUN_BASE.txt (BASE_COMMIT / PREPARED_AT / SESSIONS_BEFORE lines).",
+ "worker_branch": "dsh/<short name>",
+ "code_files": [
+  "<the file(s) the worker must change>"
+ ],
+ "allowed_changes": [
+  "<default: code_files>"
+ ],
+ "old_tests": [
+  "<tests that existed before; they must not change and are rerun>"
+ ],
+ "oracle": {
+  "tests": [
+   "<the Director's hidden acceptance tests, kept outside the project dir>"
+  ],
+  "copy": [
+   "<default: code_files>"
+  ]
+ },
+ "agents": {
+  "lead": "lead",
+  "worker": "<worker subagent name>",
+  "reviewer": "spec-reviewer"
+ },
+ "model": "deepseek-flash",
+ "hidden": {
+  "patterns": [
+   "<regex of a hidden path; default: <oracle folder>/+<oracle file> per oracle test>"
+  ],
+  "label": "<how D08 names it>"
+ },
+ "write_allowed": []
+}

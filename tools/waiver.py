@@ -36,11 +36,11 @@ per-turn read: run it when a lane goes idle or a watcher starts.
 import argparse
 import datetime
 import hashlib
+import importlib.util
 import json
 import os
 import pathlib
 import sys
-import tempfile
 
 SCHEMA = "waivers-v1"
 
@@ -118,15 +118,16 @@ def read(path):
     return data
 
 
+def load_common():
+    spec = importlib.util.spec_from_file_location("dw_common", pathlib.Path(__file__).with_name("_common.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def write(path, data):
-    target = pathlib.Path(path).resolve()
-    target.parent.mkdir(parents=True, exist_ok=True)
-    handle, temp = tempfile.mkstemp(dir=str(target.parent), prefix=".waivers_", suffix=".tmp")
-    with os.fdopen(handle, "w", encoding="utf-8") as fh:
-        fh.write(json.dumps(data, ensure_ascii=False, indent=1) + "\n")
-        fh.flush()
-        os.fsync(fh.fileno())
-    os.replace(temp, target)
+    # 3.0.0 G1: the shared atomic write, which also removes the temp file when the write fails
+    load_common().write_json_atomic(pathlib.Path(path).resolve(), data, indent=1, newline=None)
 
 
 def main(argv=None):

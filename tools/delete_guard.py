@@ -1,4 +1,4 @@
-"""Before deleting: is any candidate still referenced? (2.5.0-ds.6, DW 2.5.0 as it is; lesson: a cleanup deleted inputs two other work lines
+"""Before deleting: is any candidate still referenced? (2.5.0; lesson: a cleanup deleted inputs two other work lines
 still needed.) Only reads; never deletes, moves or writes anything.
 
   delete_guard.py [PATH ...] [--list FILE] [--repo DIR ...] [--refs GLOB ...] [--no-basename]
@@ -12,8 +12,10 @@ candidate is looked for as its full text (with / and \\ both tried) and, unless 
 A candidate file's own content does not count as a reference to itself. Prints `REFERENCED <candidate>` with up to
 5 `file:line` places (never the line's text), or `CLEAN <candidate>`, and a last line
 `DELETE_GUARD: REFERENCED|CLEAN candidates=n referenced=n`.
-Exit 1 when any candidate is referenced, 0 when all are clean, 2 on an input error (no candidate, a missing --list
-file, a --repo that is not a git repository, no git program).
+Exit 1 when any candidate is referenced, 0 when all are clean, 2 on an input error (no candidate, a missing or
+non-UTF-8 --list file, a --repo that is not a git repository, no git program, a --refs that matches no file or a
+file it cannot read). 3.0.0 (G2): with nothing to search (no --repo, no --refs) the last line is
+`DELETE_GUARD: NOT_RUN`, exit 2, never CLEAN.
 
 Safe deletion order (docs/06b): list first -> this guard -> quarantine or back up with a checksum -> delete -> reconcile.
 """
@@ -77,8 +79,8 @@ def ref_hits(files, terms, candidate):
             continue
         try:
             text = pathlib.Path(f).read_text(encoding="utf-8-sig", errors="replace")
-        except OSError:
-            continue
+        except OSError as error:  # 3.0.0 (G2): a file not read is not a file without references
+            raise RuntimeError(f"--refs {f}: cannot read ({error})")
         for n, line in enumerate(text.splitlines(), 1):
             if any(t in line.lower() for t in low):
                 hits.append(f"{f}:{n}")
@@ -98,7 +100,7 @@ def main(argv=None):
     a = ap.parse_args(argv)
     try:
         cands = candidates_from(a.paths, a.list)
-    except OSError as error:
+    except (OSError, UnicodeDecodeError) as error:
         print(f"FAIL input: --list: {type(error).__name__}: {error}")
         return 2
     if not cands:
@@ -114,8 +116,13 @@ def main(argv=None):
             print(f"FAIL input: --repo {repo}: not a git repository")
             return 2
     ref_files = sorted({f for g in a.refs for f in glob.glob(g, recursive=True) if os.path.isfile(f)})
+    for pattern in a.refs:  # 3.0.0 (G2): a --refs that matches nothing searched nothing; CLEAN would be a guess
+        if not any(os.path.isfile(f) for f in glob.glob(pattern, recursive=True)):
+            print(f"FAIL input: --refs {pattern}: no file matches")
+            return 2
     if not a.repo and not ref_files:
-        print("~ WARN nothing searched: give --repo and/or --refs that match files")
+        print("DELETE_GUARD: NOT_RUN nothing searched: give --repo and/or --refs that match files")
+        return 2
     referenced = 0
     for cand in cands:
         terms = terms_of(cand, not a.no_basename)

@@ -1,143 +1,172 @@
 #!/usr/bin/env python3
-r"""BOOTSTRAP helper for the project repo (2.2.3-ds.3): the mechanical steps the lead used to do by hand.
+"""Keep local-only files out of git, in the exclude file git really reads (3.0.0, item D6 of the series plan).
 
-  python -I -X utf8 <WS>/DIRECTOR/tools/bootstrap_repo.py --repo <REPO> --config <WS>/DIRECTOR/director_work.json
-  python -I -X utf8 <WS>/DIRECTOR/tools/bootstrap_repo.py --repo <REPO> --config ... --check
+  python -I -X utf8 bootstrap_repo.py --repo <REPO or any of its worktrees>            # write what is missing
+  python -I -X utf8 bootstrap_repo.py --repo <REPO> --check                             # only report
+  python -I -X utf8 bootstrap_repo.py --repo <REPO> --add CLAUDE.local.md               # one more local-only file
 
-Steps, each skipped when already done (so a rerun changes nothing):
-  exclude   `.memsearch/` (the DSH memory search index, a tool product, not project source) is in
-            <REPO>/.git/info/exclude; evidence_record.py wants a worktree without untracked files (WO-DS-004 DD-11)
+Default entries: `.claude/settings.local.json` (setup_project_settings.py writes it and leaves a worktree alone while
+git would commit it: NOT_IGNORED) and `DIRECTOR/` (3.0.0, R3: the director's files live inside the project and never
+reach git; a folder that ignores itself with a `DIRECTOR/.gitignore` of `*` already counts as ignored). The line goes into the repo's shared info/exclude, the file
+`git rev-parse --git-path info/exclude` names: in a linked worktree `.git` is a file, so `<worktree>/.git/info/exclude`
+does not exist and an `echo ... >> .git/info/exclude` there fails; the shared file covers every worktree of the repo.
+The path comes from _common.exclude_file (reads .git, gitdir: and commondir only).
 
-2.2.5-ds.5 (WO-DS-009 B1): the spec-first steps (CLI lookup, writing its path into the config, init) are removed.
---config is only read: a director_work.json that still has the old "sdd" block prints its WARN lines
-(safety_gate.legacy_notes: OpenSpec keys ignored, safety switches still read, 請搬到 safety) and nothing in the
-file or the repo changes because of it (L-061: the old tool looked up a CLI, wrote its path and ran init).
-2.3.0-ds.5: --config also prints `CONFIG verdict_self_check: warn|fail` (gate_check --verdict's self-check
-severity; default warn in 2.3.x); any other value prints a WARN line and warn is what gate_check uses.
+Each entry: already ignored by git (any rule) -> OK; tracked in the repo -> FAIL (an exclude line cannot hide a tracked
+file; untracking it changes the repo and needs the PO); otherwise it is added. Every entry is then checked with
+`git check-ignore`: DONE only when git says it is ignored. Never commits, never edits .gitignore.
 
---check only reports (exit 1 when a step still has work to do). Without it the steps run. Never commits.
-Prints one line per step and BOOTSTRAP_REPO: DONE|TODO|FAIL. Exit 0 done, 1 work left (--check) or a step failed,
-2 usage error.
+3.0.0 B13 (cdx report): an --add entry is an exclude pattern relative to the project. A leading `/` (anchored to the
+project root, e.g. `/.claude/hooks/x.py`) stays in the exclude line, but git is asked about the project-relative path
+(`.claude/hooks/x.py`): git takes `/...` as an absolute path and gave no answer. On Windows `\` is read as `/`, and an
+absolute path inside the project is turned into the anchored relative one; an absolute path outside it (Git Bash turns
+a leading `/` into its own install folder unless MSYS_NO_PATHCONV=1) is a usage error.
+
+Prints one line per entry and BOOTSTRAP_REPO: DONE|TODO|FAIL. Exit 0 done, 1 work left (--check) or an entry failed,
+2 usage error (no such folder, not a git checkout, a bad --add).
 """
 import argparse
 import importlib.util
+import os
 import pathlib
 import re
 import subprocess
 import sys
 
-HERE = pathlib.Path(__file__).resolve().parent
-EXCLUDES = (".memsearch/",)
+DEFAULT_ENTRIES = (".claude/settings.local.json", "DIRECTOR/")
+HEADER = "# DW bootstrap_repo: local-only files (all worktrees of this repo)\n"
 
 
-def limits_module():
-    spec = importlib.util.spec_from_file_location("bootstrap_repo_safety_gate", HERE / "safety_gate.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+def load_common():
+    spec = importlib.util.spec_from_file_location("dw_common", pathlib.Path(__file__).with_name("_common.py"))
+    common = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(common)
+    return common
 
 
-def git_dir(repo):
-    """<repo>/.git as a folder (a worktree's .git file names its git dir), or None."""
-    dot = repo / ".git"
-    if dot.is_dir():
-        return dot
-    if dot.is_file():
-        m = re.match(r"gitdir:\s*(.+)", dot.read_text(encoding="utf-8").strip())
-        if m:
-            path = pathlib.Path(m.group(1))
-            return path if path.is_absolute() else (repo / path).resolve()
+def git(repo, *args):
+    """(exit code, stdout) of one git command in REPO; exit None when git could not run."""
+    try:
+        done = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", stdin=subprocess.DEVNULL, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return None, ""
+    return done.returncode, done.stdout
+
+
+def ignored(repo, entry):
+    """True / False as git check-ignore says (a tracked file is not ignored); None when git gave no answer."""
+    code, _ = git(repo, "check-ignore", "-q", "--", entry)
+    return {0: True, 1: False}.get(code)
+
+
+def tracked(repo, entry):
+    code, out = git(repo, "ls-files", "--", entry)
+    return code == 0 and bool(out.strip())
+
+
+def bad_entry(entry):
+    if not entry.strip():
+        return "empty"
+    if "\n" in entry or "\r" in entry:
+        return "more than one line"
+    if entry.lstrip().startswith(("!", "#")):
+        return "starts with ! or # (a negation or a comment, not a file to hide)"
     return None
 
 
-def exclude_path(repo):
-    """Common git info/exclude path for REPO (resolving linked worktrees via git --git-path / commondir), or None."""
-    try:
-        done = subprocess.run(["git", "-C", str(repo), "rev-parse", "--git-path", "info/exclude"],
-                              capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20)
-        if done.returncode == 0:
-            out = done.stdout.strip()
-            if out:
-                path = pathlib.Path(out)
-                return path if path.is_absolute() else (repo / path).resolve()
-    except (OSError, subprocess.SubprocessError):
-        pass
-    gd = git_dir(repo)
-    if gd is None:
-        return None
-    commondir = gd / "commondir"
-    if commondir.is_file():
-        rel = commondir.read_text(encoding="utf-8", errors="replace").strip()
-        if rel:
-            base = pathlib.Path(rel)
-            gd = base if base.is_absolute() else (gd / base).resolve()
-    return gd / "info" / "exclude"
-
-
-def step_exclude(repo, check):
-    path = exclude_path(repo)
-    if path is None:
-        return "FAIL", f"{repo} is not a git checkout (no .git); .memsearch/ not excluded"
-    text = path.read_text(encoding="utf-8") if path.is_file() else ""
-    have = {line.strip() for line in text.splitlines()}
-    missing = [item for item in EXCLUDES if item not in have and item.rstrip("/") not in have]
-    if not missing:
-        return "OK", f"{path}: {', '.join(EXCLUDES)} already excluded"
-    if check:
-        return "TODO", f"{path}: add {', '.join(missing)}"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    add = ("" if not text or text.endswith("\n") else "\n") + "# dshdw bootstrap: tool products, local only\n" + \
-        "".join(item + "\n" for item in missing)
-    with path.open("a", encoding="utf-8", newline="\n") as handle:
-        handle.write(add)
-    return "DONE", f"{path}: added {', '.join(missing)}"
-
-
-def verdict_self_check_line(config_path):
-    """2.3.0-ds.5: the verdict_self_check level of a director_work.json, as one line."""
-    import json
-    try:
-        data = json.loads(config_path.read_text(encoding="utf-8-sig"))
-    except (OSError, ValueError) as error:
-        return f"WARN  CONFIG verdict_self_check: {config_path.name} not read ({type(error).__name__}); warn used"
-    value = data.get("verdict_self_check", "warn") if isinstance(data, dict) else "warn"
-    if value not in ("warn", "fail"):
-        return f"WARN  CONFIG verdict_self_check: \"warn\" or \"fail\", got {value!r}; gate_check --verdict uses warn"
-    origin = "" if isinstance(data, dict) and "verdict_self_check" in data else " (not set: the 2.3.x default)"
-    return f"CONFIG verdict_self_check: {value}{origin}"
+def project_entry(entry, repo):
+    """3.0.0 B13: (exclude line, project-relative path git is asked about) of one entry; ValueError for a path outside
+    the project. A leading `/` anchors the line to the project root and is never given to git."""
+    line = entry.strip()
+    if os.name == "nt":
+        line = line.replace("\\", "/")
+    inside = os.name != "nt" and (line + "/").startswith(str(repo).rstrip("/") + "/")  # POSIX: only the project's own path
+    if re.match(r"[A-Za-z]:/", line) or line.startswith("//") or inside:  # a file-system path, not a pattern
+        folder = line.endswith("/")
+        try:
+            rel = pathlib.Path(line).resolve().relative_to(repo)
+        except ValueError:
+            raise ValueError(f"{entry!r} is outside the project {repo}; give a path relative to the project (in Git Bash "
+                             "a leading / becomes the Git install folder: drop the / or set MSYS_NO_PATHCONV=1)") from None
+        line = "/" + rel.as_posix() + ("/" if folder else "")
+    query = line.lstrip("/")
+    if not query:
+        raise ValueError(f"{entry!r} names the whole project")
+    return line, query
 
 
 def main(argv=None):
     sys.stdout.reconfigure(encoding="utf-8")  # before parse_args: --help prints during parsing
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--repo", required=True, help="the project checkout")
-    ap.add_argument("--config", help="DIRECTOR/director_work.json (only read)")
+    ap.add_argument("--repo", required=True, help="the project checkout, or any worktree of it")
+    ap.add_argument("--add", action="append", default=[], metavar="PATTERN",
+                    help="one more local-only file or pattern (repeatable), e.g. CLAUDE.local.md")
     ap.add_argument("--check", action="store_true", help="only report what is left to do")
-    ap.add_argument("--skip", nargs="*", default=[], choices=("exclude",), help="steps to skip")
     a = ap.parse_args(argv)
+    for entry in a.add:
+        why = bad_entry(entry)
+        if why:
+            print(f"BOOTSTRAP_REPO: FAIL input: --add {entry!r}: {why}")
+            return 2
     repo = pathlib.Path(a.repo).resolve()
     if not repo.is_dir():
-        print(f"BOOTSTRAP_REPO: FAIL repo not found: {repo}")
+        print(f"BOOTSTRAP_REPO: FAIL input: repo not found: {repo}")
         return 2
-    config_path = pathlib.Path(a.config).resolve() if a.config else None
-    if config_path is not None and not config_path.is_file():
-        print(f"BOOTSTRAP_REPO: FAIL config not found: {config_path}")
+    code, top = git(repo, "rev-parse", "--show-toplevel")  # review P2-10: patterns are checked from the top
+    if code == 0 and top.strip():
+        repo = pathlib.Path(top.strip()).resolve()
+    path = load_common().exclude_file(repo)
+    if path is None:
+        print(f"BOOTSTRAP_REPO: FAIL input: {repo} is not in a git checkout (no .git)")
         return 2
-    if config_path is not None:
-        limits = limits_module()
-        config, problem = limits.load_config(None, config_path)
-        if problem:
-            print(f"BOOTSTRAP_REPO: FAIL {problem}")
-            return 2
-        for line in limits.legacy_notes(config):
-            print(line)
-        print(verdict_self_check_line(config_path))
-    results = []
-    if "exclude" not in a.skip:
-        results.append(("exclude",) + step_exclude(repo, a.check))
-    for name, status, detail in results:
-        print(f"{status:5} {name}: {detail}")
-    statuses = {status for _, status, _ in results}
+    try:
+        added = [project_entry(entry, repo) for entry in a.add]
+    except ValueError as error:
+        print(f"BOOTSTRAP_REPO: FAIL input: --add {error}")
+        return 2
+    entries = list(dict.fromkeys([*((e, e) for e in DEFAULT_ENTRIES), *added]))
+    print(f"exclude file: {path} (shared by every worktree of this repo)")
+
+    results, missing = [], []
+    for entry, query in entries:
+        state = ignored(repo, query)
+        if state is None:
+            results.append(("FAIL", entry, "git check-ignore gave no answer (git missing?); nothing written"))
+        elif state:
+            results.append(("OK", entry, "already ignored"))
+        elif tracked(repo, query):
+            results.append(("FAIL", entry, "tracked in the repo: an exclude line cannot hide it; untracking it "
+                                           "changes the repo and needs the PO" + (
+                                               " (R3: the director's files stay in the project but out of git; "
+                                               "`git rm -r --cached DIRECTOR` once the PO agrees)"
+                                               if entry == "DIRECTOR/" else "")))
+        else:
+            missing.append((entry, query))
+    if missing and a.check:
+        results += [("TODO", entry, f"add to {path}") for entry, _ in missing]
+    elif missing:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
+            have = {line.strip() for line in text.splitlines()}
+            fresh = [entry for entry, _ in missing if entry not in have]  # review P2-10: never the same line twice
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if fresh:
+                with path.open("a", encoding="utf-8", newline="\n") as handle:
+                    handle.write(("" if not text or text.endswith("\n") else "\n")
+                                 + ("" if HEADER in text else HEADER) + "".join(entry + "\n" for entry in fresh))
+        except OSError as error:
+            results += [("FAIL", entry, f"{path} not written: {error}") for entry, _ in missing]
+        else:
+            for entry, query in missing:  # done means git now ignores it, not that a line was written
+                if ignored(repo, query):
+                    results.append(("DONE", entry, "added; git check-ignore confirms"))
+                else:
+                    results.append(("FAIL", entry, "added, but git check-ignore still does not ignore it"))
+
+    for status, entry, detail in results:
+        print(f"{status:5} {entry}: {detail}")
+    statuses = {status for status, _, _ in results}
     overall = "FAIL" if "FAIL" in statuses else "TODO" if "TODO" in statuses else "DONE"
     print(f"BOOTSTRAP_REPO: {overall}")
     return 0 if overall == "DONE" else 1

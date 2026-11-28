@@ -1,182 +1,951 @@
-# tools — dsh-DIRECTOR-WORKER（簡稱 dshdw；舊名 DIRECTOR-WORK DeepSeek 版（DW-DS））
+# tools
 
-Python 3.9 以上，只用標準函式庫。一律用 bundled Python 執行：`python -I -X utf8 <tool>.py ...`
-（`-I` 不從目前資料夾載入模組；執行檔路徑見 `docs/11`）。每支都有 `--help`，沒有寫死的本機路徑。
-完整 CLI 契約、與上游的差異、已知限制看 [`DSH-TOOLS.md`](DSH-TOOLS.md)。
+Python 3.9 以上，只用標準函式庫。一律用 `python -I -X utf8 <tool> ...` 執行（`-I` 不從目前資料夾載入模組）。
+每支都有 `--help`。沒有任何寫死的本機路徑：路徑都從參數、目前資料夾或 git 推導。
 
-DSH 沒有 hooks、沒有 PO 頁、沒有 Claude 額度查詢；所以**沒有東西會自動跑**：用量、動作紀錄、環境檢查都是事後由總監或 worker 手動執行，`dsh_guard.py` 只是自律檢查，不是攔截器。
+| 工具 | 做什麼 | 會寫檔嗎 | 花額度嗎 |
+|---|---|---|---|
+| `setup_project_settings.py` | 在一個 git repo 的每個 worktree 寫入壓縮門檻（`autoCompactWindow` + 環境變數）、要關掉的使用者 plugin，以及可選的 `hook_guard` hook；`--runtime-guard` 一次寫入整組執行期防護 | 只有加 `--apply` 才寫，只寫 `<worktree>/.claude/settings.local.json` | 不花 |
+| `bootstrap_repo.py`（3.0.0） | 把只在本機用的檔（預設 `.claude/settings.local.json` 和總監資料夾 `DIRECTOR/`（R3），`--add` 加別的，例如 `CLAUDE.local.md`）寫進 git 真正讀的 exclude 檔（`git rev-parse --git-path info/exclude`，所有 worktree 共用；在 linked worktree 裡 `.git` 是檔案，`.git/info/exclude` 不存在）；寫完用 `git check-ignore` 確認才算 DONE；已被追蹤的檔 FAIL（要 PO）；`--check` 只回報。3.0.0 B13：`--add` 開頭的 `/` 是錨定專案根目錄（寫進 exclude 照原樣保留），問 git 時用專案相對路徑；Windows 的 `\` 和專案內的絕對路徑也可以，專案外的路徑是用法錯誤（exit 2，提示 Git Bash 會把開頭的 `/` 換成 Git 安裝資料夾） | 只有沒加 `--check` 才寫，只寫那份 exclude 檔（附加，不刪原有行）；不 commit、不改 `.gitignore` | 不花 |
+| `context_probe.py` | 免費探測每輪固定成本：類別 token、`autoCompactThreshold`、記憶檔、skill | 不寫（`--json-out` 除外） | **不花**：只送 control request，不呼叫模型 |
+| `usage_report.py` | 從本機對話紀錄只彙總 usage 數字：呼叫數、上下文分佈、模型、快取重建、工具輸出量、圖片數 | 不寫（`--json-out` 除外） | 不花 |
+| `usage_mix.py`（1.3.0） | 額度花在哪：每次呼叫依它選的動作歸成五大類（讀和查、協調、看圖與審查、實際動手、等待），對照門檻，各 session 的比例，以及開新 session 划不划算（RESTART 行）；2.4.0 在 RESULT 前加一行 LOOPS（loop_guard 各類次數，`--no-loops` 省掉，大量 transcript 約多 30 秒）；2.5.0 LOOPS 照 `--until` 算、樣本不足印 NOT_ENOUGH_DATA、`--reads` 列最常重讀的路徑 | 不寫 | 不花；只印比例，不印訊息內容 |
+| `memory_size_check.py` | 檢查記憶索引大小，超過門檻 exit 1；2.2.2 起 `--kind resume` 一次量多份 RESUME_STATE（`--file` 多次、`--glob`、`--workstreams`），每檔一行並印可搬 bytes；3.0.0 起 `--chain` 量整條必讀鏈（合計 ≤ 24 KB、列出跨檔重複段落） | 不寫 | 不花 |
+| `resume_archive.py`（2.2.2） | RESUME_STATE 瘦身：把很多輪以前的段落和表頭 `Before:` 舊紀錄原文搬到同資料夾 `RESUME_HISTORY_<YYYYMMDD>.md`；近期、現況、未結不動；預設 dry-run | 只有 `--execute` 才寫：先寫 `.bak`，再改 RESUME_STATE 和歷史檔；驗證不過就還原 | 不花 |
+| `gate_check.py` | 檢查 RESUME_STATE（2.2.2 起含大小，shadow）、工單（2.2.2 起含 BASE_REF 新鮮度，會 `git fetch`）、TASK REPORT、裁決的欄位和用詞；`--match` 逐條對照報告和工單的驗收條件，加 `--evidence-dir` 再核對證據紀錄；`--hash` 印工單雜湊（3.0.0：工單的初衷卡沒過 `spec_gate` 就不印 DISPATCH 行）；2.2.4 `--after-verdict` 列出最後一份裁決之後動到 SCOPE 外程式碼的 commit（shadow） | 不寫 | 不花 |
+| `release.py`（2.2.2） | 發版一次到位：fetch → 工作樹乾淨 → 比對遠端主線（落後停、分岔停或 `--merge`）→ HEAD 的 VERSION 與 CHANGELOG 最上段一致、tag 排序高於遠端所有 tag → README 各節（3.0.0）→ selftest → 公開掃描 → 全樹隱私掃描（3.0.0）→ 交付紀錄比對（3.0.0，`DELIVERY.json`）→ push 驗過的那個 SHA（遠端在驗證後動了就停）→ annotated tag → `gh release create --latest` → repo 說明換成新版號（3.0.0，沒有 gh 印 SKIP），每步用 ls-remote／`gh release view` 驗。預設 dry run | 只有 `--execute` 動遠端；`--merge --execute` 開本機分支 | 不花 |
+| `privacy_scan.py`（3.0.0） | 整棵樹的隱私掃描：磁碟代號路徑、使用者資料夾、email、token 格式、擁有者其他專案代號和帳號名（公開 repo 網址除外）、`privacy_banned.local.txt` 的詞；允許清單 `tools/privacy_allow.txt` 每條都要理由。`release.py` 發版前跑，有 HIT 就停；release 的公開掃描也直接用這裡的規則（3.0.0 B9） | 不寫 | 不花 |
+| `base_sync_check.py`（3.0.0） | 變體是不是「基板原樣＋轉接」：基板的每個檔（`install.py manifest` 同一份清單）在變體裡 bytes 相同（CRLF 當 LF），除非登記檔 `adapters/<平台>/BASE_SYNC.json` 列成覆寫（要理由和審過的基板 sha256）或拿掉；另查 VERSION／BASE_VERSION／CHANGELOG-upstream。原本在 cld 的 `adapters/claude/`，B6 升到基板 | 不寫 | 不花 |
+| `readme_check.py`（3.0.0） | DW 系列 README 的必要節：標題和開頭說明、「所屬系列」（每個 repo 一列，含網址和版號）、跨變體借用／換手提示詞／版號規則／CHANGELOG／致謝；變體另要基板版號、凍結 SHA 和新增／沿用上游／拿掉／安裝。缺節、空節都 FAIL（沒內容寫「無」）。`release.py` 的 readme 步驟用 `--rev HEAD` 跑 | 不寫 | 不花 |
+| `setup_check.py`（2.2.0） | 建置完成的檢查：`DIRECTOR_STATE.md` 的 `PO_PAGE_URL` 和 `PO_PAGE_PINNED` 兩行是不是三種合法寫法之一；2.2.1 起另查旁邊的 `PO_PENDING.md`、`RESUME_STATE.md` 表頭（2.2.2 加大小）、`director_work.json`（shadow，`--strict` 才失敗） | 不寫 | 不花 |
+| `dispatch_check.py`（2.5.0） | 派工紀錄：DISPATCH 行沒寫難度類別和 effort、或 effort 不在 `docs/05` 的表裡，印 WARN；`--dup` 派工前比對各線 NEXT_STEP 和最近 commit，重疊高就 WARN；3.0.0 起 log 有 DISPATCH 行而初衷卡沒過 `spec_gate` 是 FAIL | 不寫 | 不花 |
+| `delete_guard.py`（2.5.0） | 刪除前：候選路徑還有沒有被追蹤檔（`git grep -F`）或 RESUME_STATE／計畫檔（`--refs`）提到；有就 exit 1。從不刪檔 | 不寫 | 不花 |
+| `round_check.py`（1.3.0） | 修正輪數：RESUME_STATE 的 `FIX_ROUNDS:` 到第 4 輪（之後每組）沒有根因研究就 FAIL；2.3.0 研究沒有「測試條件 vs 參考條件」表印 WARN | 不寫 | 不花 |
+| `report_vs_audit.py`（1.3.0） | 用動作紀錄核對 TASK REPORT：報告說跑過的指令（`RAN:` 和 TESTS / EVIDENCE / DONE 裡的 selftest、Unity、Blender、雜湊檢查）紀錄裡有沒有、exit 和時間對不對；2.2.1 修截斷的長指令（引號、反斜線）比不到；2.2.3 比對多行腳本、省略寫法、多個 AC 編號，印 scope_check 時序 WARN；2.2.4 展開變數、`git -C`、字中 `...`、短 hex、HH:MM:SS、截斷覆蓋 | 不寫 | 不花 |
+| `transcript_audit.py`（2.2.1） | 沒裝 hook 時，從本機 Claude Code transcript（含 subagents）重建一份 hook 格式的動作紀錄，第 1 行標明是重建的；`sources` 記每個檔的名稱、SHA-256、行數和位元組數（3.0.0） | 只寫 `--out`（已存在要 `--force`） | 不花 |
+| `ran_line.py`（2.2.5） | 從時鐘和指令本身的 exit code 產生 RAN 行（代跑或補記）和 `YYYY-MM-DD HH:MM` 時間戳，不手打；2.3.0 指令行照作業系統引號（POSIX 用單引號） | 只寫 `--to` 指定的檔 | 不花 |
+| `completion.py`（2.3.0） | 完成度表：每項只給 0/25/50/75/100，100 沒有實際行為的證據路徑算 75；加權總分、關鍵路徑、和上次快照比的變化；玩家看得到的項目延後要有決定；2.4.0 可加 `depends_on` 欄，印 READY_NOW（現在能開工的項目） | 只寫 `--save` | 不花 |
+| `sim_check.py`（2.3.0） | 送 TR 前：patch 和 CPU 模擬讀的設定（時間點、常數、目標）一致，且模擬重現上次實測（容差內） | 不寫 | 不花 |
+| `waiver.py`（2.3.0） | 豁免和延後：`--until` 寫解除的事件、`--watch` 盯的檔內容變了（或 snooze 時間到）才叫醒；存在 JSON 檔，重開讀得回來；整合卡住超過 N 小時建議改成預設關閉的開關先合 | 只寫 `--file` 那份 JSON（原子寫入） | 不花 |
+| `line_brief.py`（2.3.0） | 一條工作線的摘要一次印完：看板行、git 狀態和最後 commit、最新結果檔開頭、log 尾段 | 不寫 | 不花 |
+| `pre_tr.py`（2.3.0） | 送 TR 前依改到的檔判斷缺陷類別，跑每個類別的 CPU 檢查；有一個失敗或類別沒有檢查就擋 | 不寫（跑的檢查自己寫的除外） | 不花 |
+| `pack_check.py`（2.3.0） | 審查包送出前：抽格（漏掉短階段、和週期同步）、主體在畫面內、近景真的拍到部位、檔名洩漏版本或結論、渲染設定會做出假缺陷、README 和實際檔案一致；`readme` 從實際檔案產生 README | 只有 `readme` 寫 README.md | 不花 |
+| `ruler_check.py`（2.6.0） | 量尺自己看得到嗎：對到 0 筆、少於預期、對不上實際輸出的一行、trace 被截斷都是 INVALID，不是 FAIL；列出找過的副檔名 | 不寫 | 不花 |
+| `run_plan_check.py`（2.6.0） | 測試計畫的開關和輸出項都有程式位置、在要跑的 commit 裡；跑完比對 log 的啟動參數 | 不寫 | 不花 |
+| `handoff.py`（3.0.0） | 換總監（換平台、換帳號）：`export` 先查 `DIRECTOR/INDEX.md` 有沒有指到規格、決策、進度、待決、日誌五個檔，再把派工紀錄、還沒派出的草稿、沒 commit 的工作、候選分支、stash 和外部狀態（待決頁網址、GUARDS、工作線）寫成 `DIRECTOR/HANDOFF_MANIFEST.md`（路徑都是相對的）；`verify` 重新收集比對，export 之後有變動是 STALE；`quiz` 從紀錄抽 15 題、答案寫到總監資料夾外的 key；`score` 計分，15 題對 14 題才過。缺檔、壞 JSON、不是 UTF-8 是 INVALID（exit 2） | `export` 寫清單，`quiz` 寫 key | 不花 |
+| `delivery.py`（3.0.0） | 交付合約（C2 硬底線、C4）：`record` 只在候選 commit 就是要交付的 HEAD、也是工單最新裁決（檔名有 VERDICT 和工單 ID）的 `CANDIDATE_HEAD` 時寫 `DIRECTOR/evidence/DELIVERY.json`（`--order` 必填，Direct 工單是唯一不用裁決的例外），記每個交付檔的大小和 SHA-256（commit 裡的檔取 commit 的版本，有沒 commit 的改動是 DIRTY；建置產物取磁碟上的）；`judge` 每個驗收條件、每個環境、每種判定（auto 自動跑／manual 手動 E2E／review／po）各記一筆，附證據檔雜湊；`check` 重新核對，也比目前的 HEAD（或 `--delivered SHA`）：`HEAD_MOVED`、`VERDICT_MISMATCH`、`NO_ORDER`、`UNKNOWN_KIND`、`NO_CONDITIONS`、`AMBIGUOUS_ORDER`、`E2E_NO_CANDIDATE` 都 FAIL；`check --skip-old-e2e`（3.0.0 B12，預設關）把 `CANDIDATE:` 是別的 commit 的 E2E 舊紀錄改成 `E2E_SKIPPED` 提示，不算 `E2E_OTHER_CANDIDATE`；`gate_check.py --final` 也跑它 | `record`、`judge` 寫紀錄 | 不花 |
+| `worktree.py`（3.0.0） | 每個 worker 一個 git worktree（D3）：`open` 在專案旁邊（預設 `<REPO>/../wt/<工單>`）開分支 `wt/<工單>`，開在專案資料夾裡面或資料夾已存在都拒絕；`status` 印報告要抄的 `WORKTREE:` 行；`cwd` 開工第一步確認目前資料夾就是工作區，不是就 BLOCKED；`temp` 把 TEMP / TMP / TMPDIR 指到 `<工作資料夾>/tmp`；`same` 判斷兩個資料夾是不是同一個 repo（G6，看 git common dir） | `open` 開 worktree，`temp` 建資料夾 | 不花 |
+| `install.py`（3.0.0） | 安裝或升級 `DIRECTOR/tools/`（C7）：`manifest` 列出版號和每個檔的大小、SHA-256；`install` 預設只列 ADD / UPDATE / REMOVE，`--execute` 才裝：先拿鎖、在暫存資料夾組好並驗雜湊、舊資料夾整個改名成備份並驗過、再換上新的，失敗就放回舊的；專案自己加的檔保留；`check` 照安裝紀錄核對。3.0.0 B11：只有 Claude 用的 `hook_guard.py`、`transcript_audit.py`、`context_probe.py`、`browser_check.py` 在清單標 `optional`（`MANIFEST:` 行多 `optional=N`），`install --skip-optional` 不裝它們（以前裝過的會 REMOVE，備份留著），紀錄寫在 `skipped_optional` | `--execute` 寫 `DIRECTOR/tools/` 和備份 | 不花 |
+| `hash_check.py`（2.3.0） | 雜湊比對少一個案例就 FAIL；build 新不新用內容雜湊判斷（不看檔案時間）；印實際跑的組件路徑和雜湊 | 只有 `stamp` 寫 `--out` | 不花 |
+| `flag_check.py`（2.3.0） | 開關有沒有真的被讀到：log 第一個 frame 前每個開關一行 `flag X read = 值`，型別和值都對；缺行就停、不判定 | 不寫 | 不花 |
+| `loop_guard.py`（2.4.0） | 找出在原地打轉的呼叫：同一呼叫重複、同一錯誤重試、兩個呼叫輪流、輪詢結果不變、參數一直被拒、subagent 失敗沒人處理；設定的 `wait_tools`（等 subagent 的工具）不算打轉（3.0.0）；`scan` 讀動作紀錄或 transcript，事後列出；`hook_guard.py --loop-guard` 在呼叫前提醒（不擋）；只印工具名、雜湊和次數；`scan --out FILE` 另把 JSON 寫成 UTF-8 檔，給 `status_gen.py` 的 LOOPS 段讀（3.0.0 B10）；`--transcript` 要選用工具 `transcript_audit.py`，沒裝就是輸入錯誤，請改用 `--audit`（3.0.0 B11）；3.0.0 B17（取自 dshdw ds.7）：兩個呼叫輪流但其中一個的結果有變（建好再檢查）算有進展，不報 ping_pong；讀 transcript 時，同一錯誤重試只算中間 agent 沒寫任何文字的那幾次（寫了字＝看到錯誤並說明了），動作紀錄沒有文字，照舊每次都算 | 只寫 `--out` 那一個檔 | 不花 |
+| `resume_inject.py`（2.4.0） | SessionStart hook（resume / compact）：把 RESUME_STATE 的表頭四行和未結事項放進上下文，上限 2 KB（`--max-bytes`）；`setup_project_settings.py --resume-inject FILE` 才裝 | 不寫 | 不花 |
+| `inject_scan.py`（2.4.0） | PostToolUse hook：工具帶回的文字裡有像在下指令的內容（忽略先前指示、改寫角色、隱藏字元、可讀的 base64、要你把金鑰送出去）時，在結果旁附警告，不擋、不改輸出；`scan` 掃檔案；`setup_project_settings.py --inject-scan` 才裝 | 不寫 | 不花 |
+| `trace_report.py` | 從工單、報告、裁決產生追溯表：需求 → 工單 → AC → 證據 → 裁決 | 不寫 | 不花 |
+| `metrics_report.py` | 從總監的檔案數出 `PURPOSE.md` 的成效數字：返工、中斷後重做、PO 介入、導入卡住，以及規格審查的花費；`--run` 另數接手演練的決策、重問、PO 操作和第一個可用預覽的時間 | 不寫 | 不花 |
+| `vocabulary.json` | 判定、下一步、RESULT、治理模式、證據等級等固定用詞的唯一來源；`gate_check.py` 讀它 | — | — |
+| `scope_check.py` | 比對實際改動和工單的 SCOPE / FORBIDDEN | 不寫 | 不花 |
+| `spec_gate.py`（3.0.0） | 規格閘門：初衷卡要 LOCKED、有使用者確認時間和原話、未決事項清掉、現成方案調查有寫；`approve` 寫快照並印 `BRIEF_LOCKED` 行，`check` 核對卡沒在確認後改過。`gate_check --hash`、`dispatch_check --log` 用路徑載入它 | `approve` 寫一份快照 | 不花 |
+| `safety_gate.py`（3.0.0） | 安全閘門的規則（強度 light / standard / strict、鎖住的測試、不准自己放鬆），`gate_check --order` / `--match` 用路徑載入它；自己可印 `TESTS_LOCKED` 清單、`PLAN_APPROVED` 行、目前的強度 | 不寫 | 不花 |
+| `evidence_record.py` | 跑驗收指令，留下 exit code、輸出結尾、產物 SHA-256；之後可重新比對 | `run` 寫一份小 JSON，不覆蓋舊的 | 不花 |
+| `hook_guard.py` | PreToolUse hook：預設只提醒（`--mode remind`，呼叫照跑），`--mode ask` 交給使用者，`--mode block` 才擋；對象是 push、`reset --hard`、`git clean`、裸 stash、刪 worktree / 分支 / tag、依名稱結束程序；加 `--protect` 時另擋 Write / Edit 改工單和 `DIRECTOR_LOG.md`；加 `--rules` 時依 `guard_rules.json` 對每個工具呼叫回 deny / ask / 不出聲；加 `--review` 時先把部分 ask 交給第二個模型看；加 `--sessions` 時依 `session_id` 選 director / worker / cleaner | 不寫 | 不花；放行時不輸出。`--review` 每次審查用一次 `claude -p`（不花錢，但吃訂閱額度） |
+| `doctor.py` | 2.3.0 `--licenses` 列出快到期的授權和持有的工具。報告一個 worktree 實際生效的防護：claude 版本（生效的那個和 PATH 上每一個）、各設定層合併後的 hook、動作紀錄、權限規則、`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`、隔離、worktree、各 worktree 最近有沒有 session 從那裡啟動；每項標 ENFORCED / CONFIGURED_NOT_VERIFIED / NOT_ENFORCED / MISSING | 不寫 | 不花：`claude --version` 只在本機印版本 |
+| `status_gen.py`（1.3.0） | 產生一支工作線的 `status.py`：log 尾段、雜湊、磁碟 GiB、git、最新輸出；總監版再加待決頁計數、未結案工單、未送出訊息、最近 1 小時的動作紀錄、常駐程序、LOOPS（`loop_guard.py scan --out` 的結果，3.0.0 B10） | 只寫 `--out` 那一支（已存在要 `--force`）；產生的 `status.py` 不寫 | 不花 |
+| `poll_hint.py`（1.3.0） | PostToolUse hook：同一個 session 10 分鐘內讀同一份 log 第 3 次時，提示「等完成通知」，不擋；`report` 從動作紀錄算各 session 讀 log 的次數 | hook 只寫暫存資料夾的小狀態檔；`report` 不寫 | 不花 |
+| `secret_mask.py` | 把文字裡的私鑰、token、API key、JWT、`password=` 這類值換成 `[MASKED:種類]`；`--check` 只列出找到的種類（2.4.0 起 `--check` 可給多個檔，給 pre-commit 用） | 不寫 | 不花 |
+| `pause_ctl.py` | 暫停開關：`on` / `off` 寫入或移除 `<DIRECTOR>/PAUSE` 並記進 `DIRECTOR_LOG.md`，`status` 印目前狀態；`procs` 依 CPU 增量列出停機後程序樹還剩哪些 | `on` / `off` 只寫旗標檔和 LOG 一行；`procs` 不寫、不結束任何程序 | 不花 |
+| `audit_log.py` | 動作紀錄：PostToolUse / PostToolUseFailure hook 把每個工具呼叫寫成一行有雜湊鏈的 JSONL；`verify` 檢查鏈和總監的錨點，`head` 印錨點，`cite` 印 TASK REPORT 引用的區段；`recover`（2.2.0）留複本後接著寫 | `append` 只寫紀錄檔和它的 `.lock`；其他不寫 | 不花 |
+| `guard_rules.json` | `hook_guard.py --rules` 的規則檔：每條規則的類別、worker / director 的結論、比對方式、正反例子和要寫進 settings 的權限規則 | — | — |
+| `_common.py`（3.0.0） | 共用函式庫，不單獨執行：原子寫入（先寫暫存檔再取代，寫到一半當掉也不留壞檔）、只讀檔判斷 `.git` 和 worktree（用 git common dir 認出同一個 repo 的 worktree，沒裝 git 也能用）、一次讀完紀錄檔尾端、用量數字的共用規則（D7：不是非負數的值算 0 並標成 partial）。其他工具用路徑載入它（`-I` 不從工具資料夾載入模組） | 不寫（呼叫它的工具才寫） | 不花 |
+| `selftest.py` | 用正反案例測 gate_check、trace_report、metrics_report、scope_check、evidence_record、hook_guard（含 `--review`，用假的 claude）、pause_ctl、audit_log、doctor（假的 claude 版本、暫存的設定層）和 `--hooks`、`--runtime-guard` 安裝；查用詞、必讀文件大小、`PURPOSE.md` 結構和 CHANGELOG 的「對齊初衷」 | 只寫暫存資料夾，結束刪除 | 不花 |
 
-## DSH 新增
-
-| 工具 | 做什麼 | 寫檔 |
-|---|---|---|
-| `dsh_session.py` | 共用庫：找 Node、解 session `*.jsonl.zstd` 的 zstd frames、列 session、從父 catalog 對 agent 名稱、讀投影快取。2.2.4-ds.4 唯一的 CLI：`--temp-env <WORK_DIR>` 建 `WORK_DIR/tmp`，印出把 TEMP／TMP／TMPDIR 指過去的 PowerShell 與 bash 設定行 | `--temp-env` 只建 `WORK_DIR/tmp` |
-| `dsh_usage.py` | 每 session 的 input/output/cacheRead/cacheWrite、最後 prompt tokens、context 使用率、effort/model、每日彙總。2.2.4-ds.4：`NO_DATA` 時 `--out` 也寫檔（`status`、`reason`、`hints`；exit 仍是 2，之前不寫檔）；`--project-dir` 指到啟動資料夾底下時印 `HINT` 指出上層的啟動資料夾；`--effort-check <工單>` 印 `EFFORT_ACTUAL` 行，session effort 和工單不同印 shadow WARN | `--out` 才寫 |
-| `dsh_audit.py` | 從 session 事件重建有雜湊鏈的動作紀錄，給 `report_vs_audit.py`／gate 審查用；`verify` 檢查鏈與錨點，`cite` 印報告要引的區段。2.2.1-ds.1 起第 1 行是 `kind=rebuild`（記來源 session 檔名、sha256、大小），工具呼叫從 seq 2 起 | `build` 寫一份 JSONL，不覆蓋舊的 |
-| `dsh_doctor.py` | 12 項環境檢查：Python、Node、DSH home、session log、投影快取、profile 模型/effort、沙箱/核准、git、工具/文件/範本齊不齊 | 不寫 |
-| `dsh_setup_check.py` | 建置完成的檢查：BOOTSTRAP 產出的 DIRECTOR 資料夾（必要檔案、PENDING_METHOD、PO_PENDING、RESUME_STATE 標頭、director_work.json）；2.2.1-ds.1 起另有 shadow 檢查（ID 重複、RESUME 標頭有值與 UPDATED 日期、director_work.json 欄位型別與 regex），印 `~ shadow:`，`--strict` 才算失敗；2.2.2-ds.3 加 RESUME_STATE 大小（RESUME_SIZE）和 `resume`／`base_ref`／`release` 區塊的型別檢查 | 不寫 |
-| `dsh_guard.py` | 動手前的自律檢查：force push、push、刪除、送出/發布、付款、改設定、秘密、永遠禁止的 git/程序模式、PAUSE 旗標；預設只提醒 | 不寫 |
-| `safety_gate.py` | 安全閘門（ds.2 `sdd_gate.py` 改名，2.2.5-ds.5 拿掉 OpenSpec，docs/13）：`--lock-tests` 印工單的 `TESTS_LOCKED:`、`--plan-hash` 印 `PLAN_APPROVED` 行；`gate_check.py` 用它查鎖定測試、PLAN.md、SPEC_REVIEW、輪數、安全開關不得自行關閉；也讀 `order_limits`／`protected_tests` 給 `scope_check.py`。舊的 `sdd` 區塊照讀：安全開關印「請搬到 safety」，OpenSpec 的鍵印「此鍵被忽略」 | 不寫 |
-| `bootstrap_repo.py` | 2.2.3-ds.3 BOOTSTRAP 10.5 的機械步驟：把 `.memsearch/` 加進 `<REPO>/.git/info/exclude`。做過的跳過，`--check` 只報告。2.2.5-ds.5：`--config` 只讀，舊設定的 `sdd` 區塊只印 WARN，不找、不裝、不寫任何 CLI（L-061） | 只寫 exclude |
-| `release.py` | 2.2.2-ds.3 發版一次到位：fetch → 比對 origin/main（落後／分岔／領先；分岔加 `--merge` 開 `release/<版本>` 合併，有衝突就停並列檔名）→ 工作樹有沒 commit 的 tracked 檔就停 → VERSION 與 CHANGELOG（都從 HEAD 讀）最上段一致、tag 排序高於遠端所有 tag（2.2.3-ds.3 起比「(上游版本, ds 序號)」整組，ds 序號不單獨比） → selftest → 公開掃描（金鑰、私人 email、使用者路徑、DIRECTOR/、_work/、session 檔）→ push → tag → `gh release create` → repo 描述的版本號（2.4.0-ds.6，`gh repo edit --description`），每步用 ls-remote／`gh release view`／`gh repo view` 驗。預設 dry run，`--execute` 才動遠端 | 只有 `--execute` 動遠端；`--merge --execute` 開本機分支 |
-| `verify_dsh_run.py` | 2.2.2-ds.3 DSH 試跑驗證器（由 ds.2 的 WO-101 `verify_run.py` 通用化）：R01–R21 看 repo（候選 commit、各階段改了哪些檔、鎖定測試雜湊、總監重跑測試與隱藏 oracle、gate_check、evidence 重跑、DIRECTOR_LOG），D01–D14 看 DSH session 紀錄（模型、寫入範圍、禁止動作、偷看隱藏測試、閘門、測試先寫、report_vs_audit）。工單專屬的檔名、代理名、oracle 寫在設定檔（`templates/VERIFY_DSH_RUN.json`）；單元測試 `test_verify_dsh_run.py` | 只寫 `--out` 資料夾 |
-| `selftest_ds.py` | 離線冒煙測試整組工具（help、usage、audit+report、setup fixture、status 產生、doctor、guard、gate hash、evidence、報告比對、worktree、--final 用量檢查） | 只寫暫存資料夾 |
-
-## 上游保留（跨平台，已適配 DSH）
-
-- `gate_check.py`：檢查 RESUME_STATE／工單／TASK REPORT／裁決的欄位與用詞；`--match` 逐條對報告與工單 AC、`--evidence-dir` 核證據、`--hash` 印派工雜湊、`--verdict` 驗裁決。ds.2 起 Standard／Strict 工單另查安全閘門（`safety_gate.py`；`--repo <專案>`、`--config director_work.json`）。2.2.5-ds.5：拿掉 OpenSpec 檢查；`--final <DIRECTOR>` 找不到 `usage.json` 印 `~ WARN USAGE`；`--report-skeleton` 的 `WORKTREE:` 行由 `git worktree list` 產生。2.2.2-ds.3：`--order` 先 `git fetch` 再比 BASE_REF 與遠端分支，落後或不存在印 `~ WARN BASE_REF`，`--strict-base` 判不過，fetch 失敗會明說沒比對；`base_ref` 開關型別錯會印 note 並用預設（同上游 2.2.2）。`--resume` 檔案超過 `resume.max_bytes`／`resume.max_line_bytes`（預設 20480／4096）印 `~ shadow: RESUME_SIZE`，`--strict` 判不過。`--report-skeleton 工單 [--repo] [--out]` 印出照工單填好欄位、雜湊和每條 AC 一列的 TASK REPORT 骨架，以及錄證據、scope_check、`--match` 的完整指令（DSH worker 不用讀原始碼學格式；docs/13「省 token」）。2.2.4-ds.4：`--order` 的 CHECKS 反斜線路徑指出第幾行並建議改正斜線；`--match` 的 Standard／Strict 沒有 SPEC_REVIEW 一律判不過（沒給 `--dispatch-log` 就找 DIRECTOR_LOG.md 和 `reviews/`），報告 `PROTECTED_CHANGED` 對 diff，`--dispatch-log` 的 `EFFORT_ACTUAL` 和工單 effort 不同印 shadow WARN；骨架對有 WORK_DIR 的工單印 TEMP 設定行。2.2.4-ds.4（上游 2.2.4）：`--after-verdict <裁決.md>... --repo <專案> [--orders <工單資料夾>] [--strict]` 解出每份裁決的 `CANDIDATE_HEAD:`，取其他候選都在它之前的那份當最後一份；從它到 HEAD 的 commit 改到該工單 SCOPE 外、又不是文件（`DIRECTOR/` 底下、`.md`／`.rst`／`.txt`）的檔，印 `~ WARN LATE_COMMIT <sha> <標題>: <檔案>`（shadow，exit 不變），`--strict` 判 FAIL；工單依序在 `--orders`、裁決所在資料夾、`../orders` 找，找不到就把每個非文件的檔都算進去；候選解不出或 HEAD 不含候選印 `NOT_CHECKED`，不當作通過。只讀 git。
-- `scope_check.py`：比對實際改動與工單 SCOPE／FORBIDDEN。ds.2：Standard／Strict 工單另查大小上限（`OVERSIZE`）。2.2.4-ds.4：上限讀頂層 `order_limits`（舊 `sdd.max_*` 照讀並印 shadow WARN「請搬到 order_limits」），測試檔行數另算 `max_test_lines_per_order`；共用 checkout（`--shared` 或工單 WORKTREE 寫「共用」）只算 commit 訊息有工單編號的 commit 和 SCOPE 內未 commit 的檔，別人的檔印 `OTHER`；受保護的測試（TESTS_LOCKED、`protected_tests`）只准新增或在檔尾加，改到原有內容印 `PROTECTED`，並印 `PROTECTED_CHANGED:` 給報告照抄。
-- `evidence_record.py`：跑驗收指令，留下 exit code、輸出尾段、產物 SHA-256；`verify --rerun` 可重跑。2.2.3-ds.3（上游 2.2.3，原樣搬）：`CHECKS:` 的程式只寫 `git` 也可以，但只限唯讀子指令（diff、show、log、status、rev-parse、ls-files、cat-file），子指令前的選項、其他子指令、會寫檔或執行程式的選項（`--output`、`--ext-diff`、`--textconv`、`--filters`、`--no-index`，縮寫也算）一律 `NOT_RUN`、exit 2；git 檢查在 `--repo` 頂層跑，關掉 replace 物件、fsmonitor、pager、optional locks、外部 diff 和 textconv，跑完照樣重讀 repo（docs/02「AC 用 git」）。
-- `report_vs_audit.py`：拿 RAN 與 TESTS／EVIDENCE／DONE 的指令對動作紀錄（DSH 包殼指令會先剝殼再比；比對不到就 FAIL，不會亂放行）。2.2.1：被截在 500 字的行會照 JSON 字串解回引號與反斜線，長的 Windows 路徑指令也對得上；單字比對至少要 2 個不是 `...`／`<名稱>` 的字；讀到 `kind=rebuild` 的紀錄會印一行 note。2.2.3-ds.3（上游 2.2.3）：換行、`;`、`&&`、`||` 切段，多段主張對得到多行腳本（順序要一樣），`RAN:` 下面用 ``` 包的一段算一個主張；`at=13:17（備註）` 只取時間、主張裡的全形（備註）不比；`AC-1/AC-2`、`AC-1/2`、`AC-1..AC-3` 每個編號都要有一筆，缺的會點名；有省略的主張（`...`、`427fcef...`、「同上」）可跳過紀錄裡的選項、對到開頭相同的詞，`wo-003` 對到以它開頭再接 `-`／`_`／`.` 的檔名；被截的紀錄行，3 個詞一路對到行尾也算；比到幾筆時顯示最接近 `at=` 的那筆；exit 對不上但那筆後面還跑了別的指令，印「not checkable」算 OK。兩種 shadow WARN（exit code 不變）：`RAN:` 有一行沒有 `` `指令` ``；報告寫 `SCOPE_CHECK: PASS`，但做事的 agent 最後一次 commit 之後沒有再成功跑過 `scope_check.py`。WO-DS-004 的 DSH 報告：舊版 FAIL 6 條、新版 PASS 11/11。2.2.4-ds.4（上游 2.2.4，原樣搬）：變數會展開（`$X`、`${X}`、`$env:X`、`%X%`、PowerShell 的 `a + b`、here-string；同一 agent 前面設的延用到後面的呼叫）；`git -C DIR x` 當成 `cd DIR` 再 `git x`；字中的 `...`／`…` 代表任意字；短 hex 對長 sha 的開頭；主張的絕對路徑對紀錄的相對路徑；`at=HH:MM:SS` 和 `at=HH:MM–HH:MM` 區間；`AC-1 .. AC-6`；選項順序不同也對得上（完整主張要列齊每個選項）；全形 `；` 斷句、CJK 字之間的詞當備註；多段主張分在幾次呼叫跑也算（順序要一樣）；``` 從 RAN: 外開的區塊在那裡就結束；主張在任何呼叫都找不到、但可能在另一條主張對到的截斷呼叫被截掉的那段時，印 `UNVERIFIED`（in log cut part）：獨立狀態，不算 OK、也不算 FAIL，最後一行另計 `unverified=n`（放在最後），exit code 不變，審查的人要自己看這幾條；在截斷呼叫留下來的那段就對得到的主張仍是 OK；PowerShell 這類從不回報 error 的工具，exit 對不上印 not checkable。沒人跑過的指令照樣 FAIL。WO-DS-006 三組報告：FAIL 64 → 0（其中 18 條 UNVERIFIED）。
-- `trace_report.py`：產生需求 → 工單 → AC → 證據 → 裁決的追溯表。
-- `round_check.py`：修正輪數檢查（第 4 輪起要根因研究）。
-- `status_gen.py`：產生一條工作線的 `status.py`；總監版加待決帳計數、未結案工單、近 1 小時動作紀錄（已改吃 `po_pending`、無 pending_sends／processes）。2.2.4-ds.4（上游 2.2.4，L-059）：一行超過 `width` 時頭尾都留，行內最長路徑（路徑太短就整行）的中段換成 `…`，行尾的狀態字（OK、LOW、計數）不再被切掉；已產生的 `status.py` 要用 `--force` 重新產生。
-- `metrics_report.py`：從 DIRECTOR 檔案數成效數字。
-- `memory_size_check.py`：指示鏈大小（預設找最近的 `AGENTS.md`，`--max-bytes 65536`）。2.2.2-ds.3（上游 2.2.2）：`--kind resume` 量 RESUME_STATE（整份 20480、單行 4096 bytes，`--config` 讀 `resume.*`），可給多個 `--file`、`--glob "<根>/**/RESUME_STATE*.md"` 或 `--workstreams ACTIVE_WORKSTREAMS.md`；一檔一行（OK／OVER、bytes、~token、最長行、可搬 bytes），最後 `SIZE: PASS|OVER|MISSING files=n over=n`，超過或找不到 exit 1，只讀。
-- `resume_archive.py`：2.2.2-ds.3（上游 2.2.2，原樣搬）把 RESUME_STATE 的舊段落原文搬到同資料夾 `RESUME_HISTORY_<YYYYMMDD>.md`，原處留索引。預設 dry-run；`--execute` 先寫 `.bak`，搬完驗證 (a) 歷史檔逐字含搬走的內容 (b) 留下的部分 sha256 不變、表頭仍四行 (c) 搬走＋留下＝原檔，任何一項不過就還原並 exit 1。近期只用筆數算（`resume.keep_recent`，預設 10，沒有 keep_days）；表頭、現況、保護標題、沒日期的段落不動（docs/06b「RESUME_STATE 瘦身」）。
-- `secret_mask.py`：把私鑰、token、API key、JWT、`password=` 這類值遮成 `[MASKED:種類]`。
-- `pause_ctl.py`：暫停開關（寫／移除 `<DIRECTOR>/PAUSE` 並記 LOG 一行）。
-- `audit_log.py`：動作紀錄格式的來源；DSH 只用它的 `verify`／`head`／`cite`／`recover`（`append` 是 Claude hook 用的，DSH 不呼叫）。
-- `vocabulary.json`、`guard_rules.json`：固定用詞與 `dsh_guard.py` 的規則檔。
-
-### 上游 DW 2.2.5 移植（2.2.5-ds.5，WO-DS-009 B7）
-
-- `ran_line.py`（新，上游原樣搬）：`--to 報告 -- 指令` 代跑並寫一行 RAN（exit code 照傳）；`--exit N --cmd "指令"` 剛跑完補記；`--stamp [--to 檔 --text ...]` 印或加一行 `YYYY-MM-DD HH:MM`。時間取時鐘，不手打。設了 `WORK_DIR` 時暫存檔放 `WORK_DIR/tmp`。
-- `gate_check.py`：`--sequence 工單… --dispatch-log DIRECTOR_LOG.md --repo <checkout>`（PLAN_APPROVED 早於 worker 第一個 commit、每張工單有自己的 SPEC_REVIEW、審查與裁決來自別的 session）；`--after-verdict` 預設 FAIL（裁決後改到程式碼，SCOPE 內也算；只改文件放行；`--warn` 回到 WARN）；`--final <DIRECTOR>`：`evidence/E2E/` 沒有非空檔 FAIL，缺 `ENTRY_POINT:`、DD 沒「驗收案例」印 WARN，再加 DS 的 usage.json 行（`~ WARN USAGE`）；git 的 `Filename too long` 印一行寫明路徑和超過多少；BASE_REF 括號裡的字當註解。
-- `scope_check.py`：印 `WORKTREE:` 行（`git worktree list`；`dsh_session.py --worktree-status`、`--report-skeleton` 用同一個函式）；BASE_REF 括號當註解；長路徑一行訊息；任何錯誤 `SCOPE_CHECK: NOT_RUN`，不印 Traceback。`--shared` 是 ds.4 B2，上游 2.2.5 搬回去的就是這一份。
-- `report_vs_audit.py`：H1 誤報修正（全形 `～` 區間、只設 TEMP／TMP／TMPDIR／PYTHONIOENCODING／PYTHONUTF8 的句子不比、相對路徑照該次呼叫的資料夾解開、`/d/x` 等於 `d:/x`、shell 函式展開、可少寫無害選項）；每條 FAIL 標類別（沒跑／時間不符／結束碼不符／格式），最後一行多 `time_mismatch=n not_run=n`；`--tolerance-min` 預設 10；`--lead 檔` 查 lead 自己寫的裁決、DIRECTOR_LOG 時間；最上層攔例外，exit 2 一行。
-- `dsh_audit.py`（對應上游 `transcript_audit.py` 2.2.5）：`build` 預設整條 input 都記，不再截 500 字；`--input-limit N` 截過的行標 `input_cut`。`audit_log.summary(input, limit)` 跟著上游。
-- `evidence_record.py`、`release.py`：設了 `WORK_DIR` 時，`tempfile` 和子行程的 TMPDIR／TEMP／TMP 指到 `WORK_DIR/tmp`（上游原樣搬）。
-- 範本：`templates/weird_inputs.py`（怪檔案產生器）、`templates/HANDOFF.md`（worker 到輪數上限的交接）。
-- 沒搬：`browser_check.py`（DS 本來就沒有）、上游 `selftest.py`（案例改寫進 `selftest_ds.py`）。
-
-### 上游 DW 2.3.0 移植（2.3.0-ds.5，WO-DS-010）
-
-- 新工具，上游原樣搬：`completion.py`（完成度表）、`sim_check.py`（patch 和模擬讀同一份設定）、`waiver.py`（豁免要有解除事件）、`line_brief.py`（一條工作線的摘要）、`pre_tr.py`（送 TR 前依缺陷類別跑 CPU 檢查）、`pack_check.py`（審查包）、`hash_check.py`（雜湊比對、build 新不新）、`flag_check.py`（開關有沒有真的被讀到）；2.6.0-ds.6 再加 `ruler_check.py`、`run_plan_check.py`（上游原樣搬，見下面）；範本 `templates/CPU_REPRO.md`、`templates/pre_tr.json`、`templates/run_closing.py`。用法見下面「2.3.0 新工具用法」。
-- `gate_check.py`：`--feasibility 紀錄…`（開修正組或凍結 gate 數字前的 CPU 可行性搜尋）；`--verdict` 的「自己查證的證據」：PASS 類裁決要有一行 `ran_line.py` 格式的 RAN，嚴重度看設定 `verdict_self_check`（2.3.x 預設 `warn`，`fail` 才判不過）。設定從 `--config` 讀，沒給就找裁決所在資料夾或上一層的 `director_work.json`。
-- `dsh_doctor.py --licenses 清單 [--license-days 3] [--licenses-only]`（上游 `doctor.py --licenses`，DS 沒有 `doctor.py`）：快到期的授權和持有的工具。
-- `dsh_setup_check.py`、`bootstrap_repo.py --config`：認得 `verdict_self_check`（`warn`／`fail`，其他值 setup_check 判問題、bootstrap 印 WARN）。
-- `ran_line.py` 依作業系統引號（POSIX 用單引號）；`round_check.py` 研究檔沒有「測試條件 vs 參考條件」表印 `~ WARN NO_CONDITIONS_TABLE`；`status_gen.py` 的設定可以有 `"lines"`（給 `line_brief.py`）。
-- 非 UTF-8 主控台（cp1252／cp950）的 `--help`：輸出改 UTF-8 移到解析參數之前。上游修了十支；DS 另外修了自己的 `bootstrap_repo`、`dsh_session`、`release`、`safety_gate`、`status_gen`、`dsh_doctor`。`selftest_ds.py` 用 cp1252 包住 stdout／stderr 跑每支工具（含 `dsh_*`）的 `--help`。
-- DS 專屬：`dsh_session.py --cwd-check <工作區>`（lead 開工第一步；BOOTSTRAP 第 0 步、docs/11）：目前資料夾和工作區用 realpath 比（Windows 不分大小寫），不同或在子資料夾就印 `BLOCKED: cwd <實際> != <預期>`、exit 1，什麼都不寫。
-
-### 工作品質偵測（2.3.0-ds.6，WO-DS-011）
-
-DSH 沒有事前攔截（沒有 PreToolUse hook），下面兩項都是事後從紀錄或檔案查，在檢查點、閘門、狀態報告裡讓人看見。概念來源見 CHANGELOG 2.3.0-ds.6 的 Credits；程式是自己用標準函式庫寫的。
-
-- `dsh_audit.py loops`：讀和 `build` 一樣的 DSH session（同樣的 `--session`／`--project-dir`／`--since`／`--until`），找出打轉的呼叫。2.4.0-ds.6 起類別、門檻、提醒次數和 `allow` 照上游 2.4.0 的 `loop_guard`（見下面「上游 DW 2.4.0 移植」）；**不印參數、輸出或訊息內容**。
-- `status_gen.py` 的 `"loops": {"path": "loops.json"}`：讀 `dsh_audit.py loops --out` 寫的 JSON，有發現時多印一行 `LOOPS loops.json (modified …): findings=n repeat=… …`，沒有發現不印；檔案不在印 MISSING。發現不改 exit code。選 status_gen 不選 line_brief：loops 是整個專案所有 session 的事，和 status_gen 的 AUDIT 段（動作紀錄）同一類；line_brief 只看一條工作線的看板、git、結果和 log。
-- `memory_size_check.py --chain FILE... [--max-bytes N]`：一條指示鏈的檔一起量：每檔一行（bytes；有 CRLF 另列 LF bytes；~token 照舊用 bytes/2），加總超過 `--max-bytes` 印 FAIL（exit 1）；各檔之間重複 3 行以上的段落印 `DUP a:起-迄 = b:起-迄 (n lines)`（空行略過；只有標點的行不當段落開頭），只列不判 FAIL。最後一行 `CHAIN: PASS|FAIL|MISSING files= bytes= (limit …) lf_bytes= ~tokens= dups=`。單檔和 `--kind resume` 的輸出不變。
-
-### 上游 DW 2.4.0 移植（2.4.0-ds.6，WO-DS-012）
-
-上游 2.4.0 的三個新工具都是 Claude Code hook（PreToolUse、SessionStart、PostToolUse）；DSH 一個 hook 都沒有，所以全部改成事後檢查，或由 agent 照規則自己跑。
-
-- `dsh_audit.py loops`（版本 2，`LOOPS_VERSION = 2`）。所有類別都在同一個 session 的 W 次呼叫內算（`--window`，預設 20）：
-  - `repeat`：同一個呼叫（工具＋遮罩後參數的雜湊）出現 N 次以上（`--repeat`，預設 3）。
-  - `retry_same_error`：同一個呼叫連續失敗、錯誤一樣 N 次（`--retry-errors`，預設 2），中間 agent 沒寫任何文字（思考不算；這個條件是 dshdw 自己的）。
-  - `ping_pong`：A、B 兩個呼叫輪流 N 次以上（`--ping-pong`，預設 6；2.3.0-ds.6 的 `--rounds R` 等於 `--ping-pong 2R`，仍可用），結果都沒變。
-  - `poll_no_progress`：讀取／查詢類工具（read、grep、glob、list_agents、job_list、job_output、team_task_list、team_task_get、acp_status、web_fetch、web_search、read_image、get_goal、search_context、list_subagent_models）連續 N 次結果一樣（`--poll`，預設 3）。
-  - `bad_args`：同一個工具 N 次以上因參數被拒（`--bad-args`，預設 2；DSH 紀錄的 `INVALID_ARGS`／`ToolArgsError`，或頂層參數字串不是 JSON）。`BAD_ARGS` 行照舊列全部被拒的次數、占全部呼叫的比例、前 5 名工具。
-  - `child_error_unhandled`：session 的最後一個呼叫是失敗的子代理呼叫（`child_tools`，預設 `subagent`、`wait_agent`），之後沒有任何處理。輸入裡完全沒有子代理呼叫的結果時印 `~ NOT_VERIFIED child_error_unhandled`，不算 0。
-  - 每一筆：`LOOP <類別> tool=T args=<雜湊> count=N calls=A..B reminders=K session= agent= at=<時間>`，後面依類別多 `window= total=`、`result= no_text_between`、`result=`、`reason=`、`result= last_call`；fork 出來的 session 同一筆只算一次（行尾 `copies=N`）。`count` 是那一段最多到幾次；`reminders` 是上游的即時 hook 會提醒幾次（門檻一次，之後 2 倍、4 倍、8 倍各一次）。
-  - 合法的重複（例如每分鐘看一次 build）寫進 `--config FILE` 的 `allow`：`{"tool": "PowerShell", "input": "<對遮罩後參數的 regex>", "max": 20, "why": "..."}`，`max` 以內不算。設定檔格式和上游 `loop_guard` 一樣（`schema_version`、`window`、`repeat`、`retry_errors`、`poll`、`ping_pong`、`bad_args`、`child_tools`、`allow`，都可省）；值不合法印 NOT_RUN（exit 2）。順序：預設 → `--config` → 命令列。
-  - 最後印一行和上游 `usage_mix` 同格式的 `LOOPS repeat=n retry_same_error=n ping_pong=n poll_no_progress=n bad_args=n child_error_unhandled=n|NOT_VERIFIED calls=n sessions=n`，再印 `DSH_LOOPS`。
-  - `--json` 印 JSON；`--out FILE` 另外寫一份 JSON 給 `status_gen.py`。`--events FILE...` 讀純 JSONL 事件檔（合成 fixture，`tools/fixtures/loops/`）。exit 0 沒發現、1 有發現、2 讀不到。
-  - `--since`／`--until`（2.5.0-ds.6，上游 2.5.0 F1）：每個呼叫照**自己的時間**算，只算 [since, until) 裡的呼叫（`--until` 那天整天都算）。2.4.0-ds.6 照 session 開始時間挑整個 session：前一天開、今天還在跑的 session 整個被漏掉，跑過 `--until` 的整個算進來。現在 `--until` 之後才開的 session 直接跳過；沒有時間的呼叫在有範圍時不算。`--events` 檔一樣照呼叫時間過濾。`build`、`inject` 和 `dsh_usage` 的主表仍照 session 開始時間。
-- `dsh_usage.py --loops [--loops-config FILE]`：用量報表在 TOTAL 後多一行上面那行 `LOOPS`（同一批 session）。預設不跑：全部 session 約多 1 分 45 秒，而且要 Node；`--no-fallback` 時印 `LOOPS NOT_RUN`。
-- `status_gen.py` 的 LOOPS 行只列不是 0 的類別（加 `child_error_unhandled=NOT_VERIFIED`），避免整行被截斷。
-- `resume_inject.py --file RESUME_STATE.md [--max-bytes 2048] [--section NAME ...]`：印 RESUME_STATE 的前四行和未結段（`OPEN ITEMS`、`OPEN_DECISIONS`、`IN_FLIGHT`、`未結`、`未完成`、`待辦` 這類標題或 `KEY:` 行），超過上限從整行處截斷並註明。沒有 SessionStart，所以由 agent 在恢復或 DSH 自動壓縮後自己先跑一次（AGENTS.md 段落一行、docs/06b 第 0 步）。檔案不在印一行說明（exit 0）。
-- `inject_scan.py scan FILE... [--json]`、`dsh_audit.py inject [篩選] [--events FILE...] [--tool T] [--json]`：工具輸出裡有像在下命令的文字（`override`、`role_rewrite`、`hidden`、`encoded`、`exfiltration`）時列出類別、行號（`inject` 另有工具、第幾個呼叫、session、agent、時間）；**不印那段文字**。只警告：不擋、不改。`FOUND` exit 1、`NONE` exit 0、讀不到 exit 2。會誤報（講提示注入的文件、測試樣本），也會漏（換句話說、拆行、其他編碼）。上游的 hook 模式不搬。
-- `completion.py`、`secret_mask.py`：上游 2.4.0 原樣。`completion.py` 可加 `depends_on / 依賴 / 前置` 欄，多印 `READY_NOW:`（還沒到 100、依賴全部算 100 的項目）和每個卡住的項目一行 `BLOCKED`；依賴的 ID 不在表裡或繞成一圈印 WARN。沒有這一欄的舊表輸出不變。
-- `templates/.pre-commit-config.yaml`、`templates/.gitleaks.toml`：commit 前掃秘密的範例，開頭寫 `SAMPLE ONLY`；dshdw 本身不裝。
-
-### 上游 DW 2.5.0 移植（2.5.0-ds.6，WO-DS-013）
-
-都是自己執行的事後檢查：不裝 hook、不改設定，預設只提醒（DSH 本來就沒有 PreToolUse hook）。
-
-- `dsh_audit.py loops --since／--until`（F1）：每個呼叫照自己的時間算（見上面 loops 那段）。
-- selftest 的 `either_quoting(argv)`（F3）：比對指令文字的測試，POSIX 單引號和 Windows 雙引號兩種都收（`quoting_either_250`）。
-- `dispatch_check.py --log DIRECTOR_LOG.md [--table <表.json>] [--strict]`（N1）：每一筆 `DISPATCH <WO-ID> rev=<n> sha=<雜湊>` 行在 `|` 欄寫 `class=<難度類別> effort=<off|low|high|max> model=<模型>`，gate_check 照樣讀得到。預設表在 `docs/05`「派工難度表」：`mechanical` off/low、`routine` low/high、`dev`／`ui` high、`root_cause`／`fix_after_fail`／`realism`／`core_engine` high/max、`repeated_failure` max。等級只有 DSH 能設的四個；上游的 `medium`、`xhigh` 在這裡印「unknown effort」。沒寫、類別或等級不認得、等級不在表裡：印 `~ WARN EFFORT <WO-ID> line <n>: …`；最後一行 `DISPATCH_CHECK: OK|WARN records=n warnings=n`。只提醒，exit 0；`--strict` 有 WARN 就 exit 1；檔案讀不到或表格式錯 exit 2。
-- `dispatch_check.py --dup "<標題和範圍>" [--resume "<glob>"]... [--repo <repo>]... [--since "14 days ago"] [--threshold 0.5]`（N4）：派工前把新任務的字和各線 RESUME_STATE 的 `NEXT_STEP:`、各 repo 最近的 commit 標題比 token Jaccard（共同字 ÷ 全部字；中日文用相鄰兩字）。達門檻的印 `~ WARN DUP <分數> <來源>: <內容>`，最後一行 `DUP_CHECK: OK|WARN compared=n matches=n threshold=x`。可能誤報，看過再決定。只讀 git（`git log`）。
-- `delete_guard.py [路徑 ...] [--list <清單>] [--repo <repo>]... [--refs "<glob>"]... [--no-basename]`（N3，上游原樣）：刪除前查每個候選還有沒有被提到：完整路徑（`/` 和 `\` 都試）和檔名（`--no-basename` 只找完整路徑），不分大小寫；`--repo` 找那個 repo 的追蹤檔（`git grep -F -i -I`），`--refs` 找其他宣告輸入的檔（RESUME_STATE、PLAN、工單，glob 可用 `**`）。檔案自己提到自己不算。印 `REFERENCED <候選> (n places)` 加最多 5 個 `檔案:行號`（不印那一行的內容），或 `CLEAN <候選>`；最後一行 `DELETE_GUARD: REFERENCED|CLEAN candidates=n referenced=n`。exit 1 有被引用、0 全部乾淨、2 輸入錯誤。只讀，從不刪、不搬；流程見 `docs/06b`「刪檔之前」的刪除五步。
-- `dsh_audit.py reads [篩選] [--events FILE...] [--top 20] [--json]`（N5，改寫自上游 `usage_mix.py --reads`）：讀 DSH 的 `session.v4.jsonl.zstd` 事件，列出被讀最多次的路徑、次數和那些讀取帶回來的 bytes（進了上下文的量）。算讀檔的是 DSH 的 `read` 工具（`path`），以及 pwsh／bash 的 `cat`、`head`、`tail`、`sed -n`、`Get-Content` 這類命令；fork 出來的 session 同一個呼叫只算一次；`--since`／`--until` 照每個呼叫自己的時間。DSH 的 token 用量記在每一步模型回應上，不是每個工具呼叫，所以上游的「每個路徑的加權成本」在這裡是 `NOT_VERIFIED`，只給次數和 bytes。**會印檔案路徑**：輸出只在本機看，不貼進公開的地方。exit 0，讀不到 exit 2。
-- `templates/GATE_FEASIBILITY.md`（N6）：核准閘門前，每個條件對到一個現有工具、在現況 commit 試跑一次、原則上達得到；放寬量法要另一個人（或另開的子代理 session）拿已知缺陷樣本確認仍抓得到（`docs/07` 第 7 節）。
-- `templates/SETTINGS_MANIFEST.md`（N7）：擷取、量測、審查前先寫打算用的設定，跑完從輸出讀實際設定逐項比；不同就是 INVALID（重跑），不是候選的 FAIL（`docs/07` 第 7 節）。
-- `docs/06b`「程序衛生」（N8）：停背景工作只停這個 DSH session 自己啟動的程序樹、批次前驗名稱、commit 前用 `&&` 和 `git diff --cached --check`、JSON 用 parser 讀、時間取時鐘、CRLF 檔不用 `sed -i`、安全重寫 RESUME 標頭、量測獨佔機器；`templates/.pre-commit-config.yaml` 多一個 `dshdw-conflict-markers`（pygrep，pre-commit 內建，不下載）。
-- `docs/10` 第 82～126 條（N9）：上游 2.5.0 從總監收件匣併入的教訓（標「收件匣 L-0xx」，和前面各條的 L 編號是兩套），每條一句規則。docs/10 不是每輪必讀，不進 agent instructions，不佔 65536 bytes。
-- `round_check.py`（N2）：第 2 組（之後每組）沒過，研究檔那一節要寫獨立診斷 `DIAGNOSIS_BY:`（另一個子代理 session、別的模型或人）和 `DIAGNOSIS_RESULT:`；有寫 `IMPLEMENTER:` 時兩者要不同。沒寫或相同印 `~ WARN NO_INDEPENDENT_DIAGNOSIS`，不改 exit。
-
-## 已移除（Claude 專屬）
-
-`hook_guard.py`（規則留在 `guard_rules.json`）、`setup_project_settings.py`（改 `.claude/settings.local.json`）、
-`context_probe.py`、`usage_report.py`、`usage_mix.py`、`doctor.py`、`setup_check.py`、
-`choice_reconcile.py`、`browser_check.py`、`poll_hint.py`、`selftest.py`、`container/`。
-理由：DSH 沒有 hooks、Artifact 私人待決頁、Claude 方案額度或容器 worker；對應能力改用 `ask_user_question`＋`PO_PENDING.md`、`dsh_usage.py`、子代理共享 checkout。
-
-## 常用指令
+## setup_project_settings.py
 
 ```text
-# 總監：重建 worker 的動作紀錄、核對報告
-python -I -X utf8 tools/dsh_audit.py build --session w1 --out DIRECTOR/research/audit-2026-11-12.jsonl
-python -I -X utf8 tools/report_vs_audit.py --report _work/demo-worker/TASK_REPORT.md --log DIRECTOR/research/audit-2026-11-12.jsonl --utc-offset +08:00
-
-# 總監：環境與建置檢查
-python -I -X utf8 tools/dsh_doctor.py
-python -I -X utf8 tools/dsh_setup_check.py DIRECTOR
-
-# 總監：用量（--project-dir 比對 session 啟動資料夾；單線用 --session <agent>）
-python -I -X utf8 tools/dsh_usage.py --project-dir <WS>
-python -I -X utf8 tools/dsh_usage.py --session w1 --json
-
-# worker／總監：動手前自律檢查
-python -I -X utf8 tools/dsh_guard.py --command "git push origin main" --profile worker
-
-# 總監：安全閘門（docs/13）
-python -I -X utf8 tools/safety_gate.py --lock-tests tests/test_x.py --repo <專案>
-python -I -X utf8 tools/safety_gate.py --plan-hash <WORK_DIR>/WO-002/PLAN.md --order DIRECTOR/orders/WO-002.md
-
-# 總監：工單閘門
-python -I -X utf8 tools/gate_check.py --order DIRECTOR/orders/WO-002.md --repo <專案>
-python -I -X utf8 tools/gate_check.py --after-verdict DIRECTOR/gates/WO-002-GATE.md --repo <專案>   # 2.2.4：裁決之後的未審 commit
-
-# 總監：每個 worker 一個 worktree（2.2.5-ds.5）
-python -I -X utf8 tools/dsh_session.py --worker-worktree <專案> --order WO-002 --branch wo-002 --base <BASE_REF 的 commit>
-python -I -X utf8 tools/dsh_session.py --worktree-status <checkout>
-
-# 收尾（2.2.5-ds.5）：最後一步寫用量，再跑 --final
-python -I -X utf8 tools/dsh_usage.py --project-dir <WS> --out DIRECTOR/usage.json
-python -I -X utf8 tools/gate_check.py --final DIRECTOR
-
-# 總監：打轉偵測（2.3.0-ds.6，2.4.0-ds.6 照上游 loop_guard；事後查，DSH 擋不住）
-python -I -X utf8 tools/dsh_audit.py loops --project-dir <WS> --out DIRECTOR/loops.json
-
-# 總監：派工紀錄的難度和 effort、派工前查重複（2.5.0-ds.6；只提醒）
-python -I -X utf8 tools/dispatch_check.py --log DIRECTOR/DIRECTOR_LOG.md
-python -I -X utf8 tools/dispatch_check.py --dup "<標題和範圍>" --resume "<各線>/**/RESUME_STATE*.md" --repo <repo>
-
-# 總監：最常重讀的檔（2.5.0-ds.6；會印路徑，只在本機看）
-python -I -X utf8 tools/dsh_audit.py reads --project-dir <WS> --since <日期>
-
-# 清理員：刪檔之前（2.5.0-ds.6；有被引用 exit 1，不刪）
-python -I -X utf8 tools/delete_guard.py --list <清單> --repo <repo> --refs "<各線>/**/RESUME_STATE*.md"
-
-# 總監：工具輸出裡的提示注入（2.4.0-ds.6；只警告）
-python -I -X utf8 tools/dsh_audit.py inject --project-dir <WS>
-
-# 任何 agent：恢復或 DSH 自動壓縮後第一步（2.4.0-ds.6）
-python -I -X utf8 tools/resume_inject.py --file <自己的 RESUME_STATE.md>
-
-# 總監：整條指示鏈的大小與重複段落（2.3.0-ds.6，docs/09）
-python -I -X utf8 tools/memory_size_check.py --chain <REPO>/AGENTS.md <REPO>/AGENTS.local.md --max-bytes 65536
-
-# 全組冒煙測試
-python -I -X utf8 tools/selftest_ds.py
+python -I -X utf8 setup_project_settings.py --repo <repo>                     # 只回報
+python -I -X utf8 setup_project_settings.py --repo <repo> --apply             # 寫入
+python -I -X utf8 setup_project_settings.py --config <DIRECTOR>/director_work.json --apply
+python -I -X utf8 setup_project_settings.py --plugins-off a@m,b@m --apply     # PO 勾過的才放
+python -I -X utf8 setup_project_settings.py --hooks --apply                   # 加裝 hook_guard（提醒模式）
+python -I -X utf8 setup_project_settings.py --protect-director <DIRECTOR> --director-worktree <總監的 worktree> --apply
+python -I -X utf8 setup_project_settings.py --guard-profile worker --director-worktree <總監的 worktree> --apply
+python -I -X utf8 setup_project_settings.py --guard-profile worker --protect-director <DIRECTOR> --director-worktree <總監的 worktree> --apply   # worker 加暫停旗標
+python -I -X utf8 setup_project_settings.py --runtime-guard --protect-director <DIRECTOR> --director-worktree <總監的 worktree> --apply   # 整組執行期防護（1.1.0）
 ```
 
-## 2.3.0 新工具用法（上游 DW 2.3.0）
+- 預設 `--repo` = 目前資料夾所在的 git repo，預設處理它的所有 worktree（`--only-this` 只處理一個）。
+- 寫入前先確認 `.claude/settings.local.json` 已被 git 忽略；沒有就 `NOT_IGNORED`，不寫。處理：`bootstrap_repo.py --repo <那個 worktree>`（3.0.0），訊息會印出要寫的 exclude 檔實際位置。
+- 已存在的檔案先備份到 `--backup-dir`（預設 `<git common dir>/director-settings-backup/`，不會被 commit）。
+- 合併寫入，保留其他設定鍵；寫完重讀確認。
+- 使用者層設定（家目錄的 `.claude/`）絕不碰。
+- 設定檔欄位見 `../director_work.example.json`；命令列參數優先於設定檔。
+- 新開 worktree 後要再跑一次（這個檔案不跟著 git 走）。
+- `--hooks`：加一個 `Bash|PowerShell` 的 PreToolUse hook，用目前的 Python 跑 `hook_guard.py`；已有就不重複加。
+- `--guard-mode remind|ask|block`（設定檔 `guard_mode`，1.3.1）：hook 標出的呼叫怎麼處理。預設 `remind`：照跑，附一行提醒；`ask`：交給使用者當場決定；`block`：exit 2 擋下，是明確 opt-in 的嚴格模式。**不要預設把 block 裝到工作線**，工作線的 AI 會因此不敢動手（docs/10 L-045）。`remind` 不寫 `--mode`，其他模式在指令加 `--mode X`；沒給時沿用已裝項目的 `--mode`（沒有就是 remind）。模式不同也算 `MISSING (hooks.PreToolUse command)`。
+- `--protect-director <DIRECTOR>`（設定檔 `protect_director`，隱含 `--hooks`）：hook 的 matcher 改成 `Bash|PowerShell|Write|Edit`，指令加 `--protect "<DIRECTOR>"`。`--director-worktree`（設定檔 `director_worktree`）指定的總監 worktree 維持原本的 hook，總監照常改工單。
+- 已裝的 hook_guard 項目和要的不同時，`--apply` 就地換掉，不另外追加：
+  - matcher 或 `--protect` 不同：`MISSING (hooks.PreToolUse matcher)`。
+  - 指令不是逐字相同（換了 Python、hook_guard.py 搬走或不存在）：`MISSING (hooks.PreToolUse command)`。
+  - 沒給 `--protect-director` 時，沿用已裝項目的 `--protect`（或沒有）。
+- `--guard-profile worker|director`（設定檔 `guard_profile`，隱含 `--hooks`）：hook 的 matcher 改成 `*`（每個工具呼叫都檢查），指令加 `--rules "<tools>/guard_rules.json" --profile <身分>`，並設 `"onFailure": "block"`：hook 自己壞掉（例如規則檔寫壞，exit 1）時擋下，不放行。`--director-worktree` 指定的 worktree 一律用 director。
+  - block 模式：每條規則的 `permissions` 依這個身分的結論寫進 `permissions.deny` 或 `permissions.ask`（第二層：這兩種規則在每個權限模式都有效，包括 bypass）。ask 模式全部寫進 `permissions.ask`。remind 模式只寫機密規則（G50）的 `permissions.deny`，其他一條都不寫，舊安裝留下的規則權限從兩個清單拿掉（否則 Claude Code 照樣擋）；ask 模式的 G50 也留在 deny，使用者自己加的權限規則不動。缺的報 `MISSING (permissions.deny)` / `MISSING (permissions.ask)`；`--apply` 只補上缺的，放錯清單的（換身分後）搬過去，其他權限規則不動。
+  - profile 不同也算 `MISSING (hooks.PreToolUse matcher)`。沒給 `--guard-profile` 時沿用已裝項目的 `--profile`，和 `--protect` 一樣。
+  - worker 的指令再加 `--pause-flag "<旗標檔>"`：`--pause-flag`（設定檔 `pause_flag`），沒給就用 `--protect-director` 的 `<DIRECTOR>/PAUSE`。總監的 worktree 不加：worker 暫停時，總監還要停程序樹。旗標檔不同也算 `MISSING (hooks.PreToolUse matcher)`；沒給 `--guard-profile` 時沿用已裝項目的 `--pause-flag`。
+- `--audit-log <檔案>`（設定檔 `audit_log`，隱含 `--hooks`）：加 PostToolUse 和 PostToolUseFailure 兩個 hook（matcher `*`），執行 `audit_log.py append --log "<檔案>"`；hook_guard 的指令也加 `--audit "<檔案>"`，擋下和詢問也記進同一條鏈。路徑裡的 `{worktree}` 在 setup 時換成 worktree 資料夾名稱；`{container}` 留到 hook 執行時由 audit_log.py 換成容器 ID 前 12 碼（容器外是 `host`）。所以一個 worker、一個容器各一份紀錄，各自一條鏈；其他 `{名稱}` 一律報錯。缺的報 `MISSING (hooks.PostToolUse)` / `MISSING (hooks.PostToolUseFailure)`，`--apply` 就地換掉舊的 audit_log 項目。沒給 `--audit-log` 時沿用已裝項目的 `--audit`。下面的 hook 測試不帶 `--audit`，測試呼叫不會寫進紀錄。
+- `--guard-review`（設定檔 `guard_review: true`）：有 `--guard-profile` 的項目加上 hook_guard `--review`。缺的報 `MISSING`。沒給時沿用已裝項目的 `--review`；要拿掉就手動刪掉指令結尾的 ` --review`。hook 測試會去掉 `--review`，測試呼叫不會啟動審查。
+- `--runtime-guard`（設定檔 `runtime_guard: true`，1.1.0）：寫入 `../templates/settings.runtime-guard.json` 列出的那一組。
+  - 沒給 `--guard-profile` 就用 worker；沒給 `--audit-log` 就用 `<git common dir>/director-audit/{worktree}-{container}.jsonl`（不會被 commit）。1.1.0 裝的 `{worktree}.jsonl` 照舊能用，重跑 `--apply` 才換成新檔名，舊檔留著不動。
+  - 另加 `env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB = "1"`：子程序（Bash、hook 等）拿不到環境變數裡的 Anthropic 和雲端憑證。官方文件寫明它**保留** `GITHUB_TOKEN`、`GH_TOKEN`、proxy 帳密和 `GIT_CONFIG_*`。缺的報 `MISSING (env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB)`。
+  - 範本裡的 `<PYTHON>`、`<DW>`、`<PAUSE_FLAG>`、`<AUDIT_LOG>` 由 setup 換成實際路徑；selftest 確認範本和 setup 寫出的內容相同。範本不含 sandbox（原生 Windows 沒有）、`blockWritesOutsideWorkingDirectories`（依使用者決定不啟用）和 WSL2 版本。
+  - 寫完用 `doctor.py` 看實際生效的是哪些。
+- 項目到位後，實際跑一次 hook：一個要放行的指令（exit 0）、一個要標出的指令，有 `--protect` 時再加一個寫進 `orders/` 的 Write。有 `--profile` 時再加一個每個身分都標出的 MCP 呼叫（`buy_item`，證明規則檔有讀到）。放行那次 stdout 也要是空的。標出的那幾次依模式要得到：block `2`、ask `ask`（ask JSON）、remind `remind`（exit 0 加提醒 JSON）。結果印在 OK / SET 那行，例如 `(hook test: allow=0 block=remind block-rule=remind)`、block 模式 `(hook test: allow=0 block=2 block-write=2 block-rule=2)`；不對就是 `HOOK_FAIL`，exit 1。
 
-### completion.py（2.3.0，N1）
+## hook_guard.py
+
+- Claude Code 每次執行 Bash / PowerShell 前把指令以 JSON 傳進來。`docs/08` 列的指令依 `--mode`（1.3.1）處理：
+  - `remind`（預設）：exit 0，指令照跑；stdout 一行 JSON，`systemMessage` 給使用者看、`hookSpecificOutput.additionalContext` 給模型看，都是 `hook_guard reminder [ID]: 原因`，給模型的那份另註明「只是提醒；使用者已在對話裡核准就直接做、不要再問」。使用者核准後 AI 直接執行，不必拆設定。
+  - `ask`：exit 0，stdout 是 `permissionDecision: "ask"` 的 JSON，使用者當場決定。
+  - `block`：明確 opt-in 的嚴格模式，exit 2，理由印到 stderr，指令不執行（1.3.0 以前的行為）。
+  - 暫停旗標（`--pause-flag`）是人明確設下的停止，每個模式都擋；機密規則（G50–G52，類別 `secret`）的 deny 也是每個模式都擋，讀機密不在「核准就執行」的範圍。自動暫停和 `--review` 只在 block 模式作用。
+  - 以下寫「擋」「deny」「exit 2」的地方都是 block 模式；remind / ask 模式同一批呼叫得到提醒或 ask。
+- Bash 的 here-document（`cat <<'EOF' ... EOF`、`<<-`、不加引號的 `EOF`）內容是資料，不是指令，不檢查；不加引號時內容裡的 `$(...)` 和反引號照樣會執行，照樣檢查。找不到結尾那一行的 here-document 照原文檢查，藏不了指令。`<<<` 不是 here-document。
+- 只在引號外拆 `&&`、`;`、`|`、`$(...)`。引號裡的字串只有被執行時才檢查：`bash` / `sh -c`、`cmd /c`、`powershell -Command`、`eval`、`Invoke-Expression`，以及雙引號裡的 `$(...)`。所以 `grep "git stash"`、`git commit -m "...git push..."`、`echo "git push origin"` 不會被擋。
+- 略過 `git -C <dir>`、`-c k=v` 這類全域選項；`<碟>:\...\git.exe` 這種反斜線路徑也認得。
+- 依名稱結束程序：`Stop-Process` 沒帶 `-Id` 一律擋，包括 `Get-Process x | Stop-Process`。
+- 放行：`git stash push -m <標記>`、`stash apply / list / show`、`git clean -n`、`reset --soft`、`taskkill /PID`、`Stop-Process -Id`。
+- 不加 `--rules` 時**沒有涵蓋刪檔**：`rm -rf`、`Remove-Item -Recurse` 照常執行，刪檔照 `docs/08` 和 `docs/06b`「刪檔之前」。
+- 清理員的 session 不裝這個 hook：它要刪 worktree，而 `worktree remove / prune` 會被擋。1.3.0 起可以改用 `--sessions`（下面）的 cleaner。
+- `--sessions <檔>`（1.3.0，要配 `--rules`）：同一個資料夾啟動的 session 共用一份 settings，所以依 hook 輸入的 `session_id` 選 profile。檔案格式見 `templates/guard_sessions.json`：`sessions` 是 `session_id` → `director` / `worker` / `cleaner`（或 `{profile, name}`），`default` 給沒列到的，`protected` 是任何角色都不能刪或搬的路徑。cleaner = worker 但刪除規則不套用。總監的 session 不受暫停旗標影響。檔案讀不到或格式錯就 exit 1。安裝：`setup_project_settings.py --hooks --rules --session-map <檔> --apply`，權限清單取各角色最寬鬆的那個。hook 輸入只有 `session_id`，沒有 session 名稱，所以要先從 Desktop 或對話紀錄查到 id 再寫進檔案。
+- 只是安全帶，不是安全邊界：寫在腳本檔裡或執行時才組出來的指令看不到。PO 在對話裡核准 push 之後，AI 直接執行：remind 模式照跑、ask 模式由使用者當場點頭；不必移除 hook。只有 block 模式會擋下已核准的動作，所以工作線預設不裝 block。
+- `--protect <DIRECTOR>`：Write / Edit 的 `file_path` 落在 `<DIRECTOR>/orders/` 底下或就是 `<DIRECTOR>/DIRECTOR_LOG.md` 時 exit 2。相對路徑以 hook 輸入的 `cwd` 為準；兩邊都先 resolve（展開 junction、symlink、`..`），Windows 再展開 8.3 短檔名、不分大小寫比對。
+- Windows 路徑先正規化：去掉 `\\?\` 和 `\\.\` 前綴（磁碟或 UNC 路徑）；NTFS 資料流（`DIRECTOR_LOG.md::$DATA`、`x.md:note`）視為檔案本身。其他裝置路徑（GLOBALROOT、volume GUID）不比對，一律擋下並請改用磁碟或 UNC 路徑。
+- 目標或它的上層資料夾已存在時，再用檔案識別（磁碟序號＋檔案編號）和 `DIRECTOR_LOG.md`、`orders/` 底下的每個檔案和資料夾比對，所以同一個物件換個名字（UNC 別名、既有檔案的 hardlink）也會擋下。
+- `--protect` 只防手誤，擋不到：用 Bash / PowerShell 寫檔、MultiEdit、NotebookEdit、MCP 工具寫檔、經由別名（網路磁碟、`subst` 磁碟代號、UNC 共用）建立還不存在的 `DIRECTOR_LOG.md` 或 `orders/` 資料夾，以及 hook 執行時目標還不存在的 junction。symlink 會先 resolve，但一般帳號沒有建立 symlink 的權限（WinError 1314），selftest 只測 junction。真的要擋，請用作業系統的寫入權限保護 DIRECTOR 資料夾。
+
+### `--rules`、`--profile`（1.1.0）
+
+```text
+hook_guard.py --rules <tools>/guard_rules.json --profile worker|director [--protect <DIRECTOR>]
+```
+
+- 規則檔每條：`id`（`G` 加兩位以上數字，`G00` 保留）、`category`、`decision`（worker 和 director 各一個：`deny` / `ask` / `none`）、`reason`（不可有 `<...>`）、`match`、`example_block`、`example_allow`，選用 `permissions`。
+- `match` 三種：
+  - `shell`：Bash / PowerShell 指令拆成每個子指令（含 `bash -c`、`cmd /c`、`powershell -c`、`eval`、`xargs` 這類包起來的），比指令名稱（`cmd` 是完整比對的 regex，去掉路徑和 `.exe`、不分大小寫）、依序的非選項字（`args`，`git -C`、`gh -R`、`aws --profile` 這類選項的值會跳過）、選項 regex（`flags` 至少一個、`not_flags` 一個都不能有）。另有三個選用欄位：
+    - `bare: true`：指令完全沒有參數才算（`env`、`set`）。
+    - `arg_search`：任一參數用 regex 搜得到（`echo $GITHUB_TOKEN`）。
+    - `path_args` / `path_except`：每個非選項參數以 hook 的 `cwd` 解析成路徑（展開 `~`、`$HOME`、`${VAR}`、`%VAR%`、`$env:VAR`），比 glob，規則同 `path`。
+    - `env` 後面只有選項或 `X=1` 指派時，`env` 本身就是印環境變數的指令；`env X=1 python a.py` 比的是 `python`。
+  - `path`：`tools` 列的工具，`file_path`（或 `notebook_path`、`path`）比 `globs`，`except` 除外。Grep 的 `glob`、Glob 的 `pattern` 接在搜尋路徑後面，也當成一個目標比。`~/` 是家目錄，`**/` 是任意層，`*` 不跨 `/`；相對路徑以 hook 輸入的 `cwd` 為準；Windows 不分大小寫、反斜線視同 `/`。
+    - 選用 `shell_write: true`：Bash / PowerShell / Monitor 寫到這些路徑也算命中。看三種寫法：寫檔指令（同 G00 的清單）的非選項參數，複製類（`cp`、`copy`、`Copy-Item`、`install`、`ln`、`scp`、`xcopy`、`robocopy`、`rsync`）只看目的地（`-Destination` / `-t` 的值，否則最後一個參數；目的地是資料夾時接上來源檔名）；重新導向的目標；同一行有 `[IO.File]::Write*` 這類 .NET 寫檔時，行內任一個比得到的路徑。所以 `cp CLAUDE.md /tmp/backup.md`、`cat CLAUDE.md` 照常放行。
+  - `mcp`：只看 MCP 工具名稱最後一段（`mcp__伺服器__動作`），駝峰拆成底線、轉小寫後比 `words`。開頭是 `read_only_mcp_prefixes`（get、list、read、search、query、status）的一律不比，所以 `get_order`、`list_billing_charges` 不會被「付費」擋。
+- `internal_report_tools`（`SendMessage`、`mcp__ccd_session_mgmt__send_message`）是回報總監的管道，任何規則都不比。
+- Monitor：Claude Code 2.1.314 起 Monitor 的 shell 指令也會經過 PreToolUse hook。hook_guard 把 `tool_input.command` 當 Bash 指令比 `shell` 規則、G00 和 G40 的 shell 寫檔。**NOT_VERIFIED**：欄位名稱 `command` 是照文件推定，還沒有實際收到 Monitor 的 hook 輸入核對過。`command` 不存在或不是字串時不比、exit 0、不出聲。
+- 內建 `G00`：Write / Edit / MultiEdit / NotebookEdit 改使用中的規則檔、`hook_guard.py` 旁邊的 `guard_rules.json` 或 `hook_guard.py` 本身，worker deny、director ask。Bash / PowerShell 也算：子指令寫出這些檔名，又是寫檔指令（`sed -i`、`perl -i`、`tee`、`cp`、`mv`、`git checkout/restore`、`Set-Content`、`Out-File`、`Copy-Item` 等），或重新導向（`>`、`>>`、`2>`、`&>`、`>|`）指到這些檔（從整行原文找，所以 `echo {}>guard_rules.json`、`{ ...; }>hook_guard.py` 這類 `{ }` 緊貼 `>` 的寫法也算），或同一行有 `[IO.File]::Write*` 這類 .NET 寫檔呼叫。只讀的指令（`cat`、`sed -n`、`git diff`、把輸出導到別的檔）照常放行。檔名放在變數裡、`python -c` 或腳本裡寫檔，看不到。
+- 結論：有 deny 就 exit 2，stderr 是 `BLOCKED by hook_guard [ID]: 原因`；原本的檢查（stash、`reset --hard`、`--protect` 等）擋下時用原本的訊息；有 ask 就 exit 0，stdout 只有一行 `{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask", "permissionDecisionReason": "[ID] 原因"}}`；其他 exit 0、什麼都不印。**永遠不回 allow**：不出聲就是照 Claude Code 自己的權限流程，hook 只會讓結果更嚴。
+- 多條規則同時命中：deny 優先於 ask，同一種結論取編號最小的。結果只看輸入和規則檔，規則的先後順序不影響結果。
+- 規則檔讀不到或格式錯：exit 1，stderr `hook_guard: bad rules file: ...`。配合 setup 寫的 `"onFailure": "block"`，等於擋下所有工具呼叫，直到規則檔修好。
+- 預設規則（`guard_rules.json`）：
+
+| ID | 類別 | worker | director | 擋什麼 |
+|---|---|---|---|---|
+| G01 | force push | deny | deny | `git push --force`、`-f`、`--force-with-lease`、`--mirror`、`--delete`、`+ref`、`:ref` |
+| G02 | push | deny | deny | `git push` 各種寫法、`git send-pack`、`git http-push`（含 `git-push`、`git-send-pack` 執行檔）、`gh repo sync`；設定 alias 的 `git -c alias.*=`、`--config-env=alias.*`、`git config alias.*`（查詢的 `--get`、`-l`、`--unset` 除外），因為 alias 可以把 push 換個名字執行 |
+| G10 | 刪除 | deny | ask | `rm`、`rmdir`、`rd`、`del`、`erase`、`unlink`、`shred`、`Remove-Item`、`ri`、`find -delete` |
+| G11 | 刪除 | deny | ask | MCP 動作含 delete、trash、destroy、purge、wipe、erase、uninstall |
+| G20 | 送出 | deny | ask | `gh pr/issue/release/gist/repo` 的寫入子指令、`gh api` 帶寫入方法或欄位、`npm/pnpm/yarn/cargo publish`、`twine upload`、`docker/podman/gem push` |
+| G21 | 送出 | deny | ask | MCP 動作含 send、post、publish、share、reply、comment、merge、create_pr、deploy、upload 等 |
+| G30 | 付費 | deny | deny | MCP 動作含 buy、purchase、checkout、payment、pay、order、subscribe、transfer、renew |
+| G40 | 改設定 | deny | ask | Write / Edit 到 `.claude/settings*.json`、`managed-settings.json`、`.credentials.json`、`CLAUDE.md`、`CLAUDE.local.md`、`~/.claude.json`、`.mcp.json`；Bash / PowerShell 用寫檔指令、重新導向或 .NET 寫檔寫這些檔也算（`shell_write`）；`~/.claude/projects/*/memory/**` 和 `~/.claude/plans/**` 除外 |
+| G41 | 改設定 | deny | ask | `git config --global/--system`、`claude config/mcp` 的寫入、`setx`、`reg add` 等、PowerShell 改 HKLM / HKCU |
+| G42 | 改設定 | deny | ask | MCP 動作含 setting、settings、permission_mode |
+| G50 | 機密 | deny | deny | Read / Grep / Glob / NotebookRead 和讀檔類指令（`cat`、`head`、`grep`、`sed`、`Get-Content`、`type`、`cp`、`base64`、`certutil` 等）碰到 `.env`、`.env.*`、`.envrc`、`*.pem`、`*.key`、`*.p12`、`*.pfx`、`id_rsa*` 等私鑰、`.ssh/**`、`.aws/credentials`、`gh/hosts.yml`（含 Windows 的 `%APPDATA%/GitHub CLI/hosts.yml`）、`.git-credentials`、`.npmrc`、`.pypirc`、`.netrc`、`.claude/.credentials.json`、`credentials.json`、`secrets.*`；`.env.example`、`.env.sample`、`.env.template`、`.env.dist`、`*.pub`、`known_hosts`、`.ssh/config` 除外 |
+| G51 | 機密 | deny | deny | 印出環境變數：不帶參數的 `env`、`printenv`、`set`、`export`；`export -p`、`declare -x`；`gci env:`；`echo` / `Write-Output` 帶名稱含 token、secret、password、key、credential、auth 的變數；單獨一行 `$env:GITHUB_TOKEN`；`[Environment]::GetEnvironmentVariable(s)` |
+| G52 | 機密 | deny | deny | 印出 token 或密碼的指令：`gh auth token`、`gh auth status --show-token`、`git credential fill`、credential helper 的 `get`、`aws configure get`、`aws configure export-credentials`、`aws sts get-session-token`、`az account get-access-token`、`gcloud auth print-*-token`、`kubectl config view --raw`、`security find-*-password -w` |
+
+- worker 的刪除是 deny，訊息會說下一步：把可刪清單（路徑、大小、原因）送給總監或清理員。
+- block 模式下 push 對總監也是 deny：沒加 `--rules` 時 `git push` 本來就對每個人標出，規則檔沿用。PO 核准的 push 要在 block 模式下執行，就改用 remind 或 ask 模式；1.3.1 起預設就是 remind。
+- G50–G52 對總監也是 deny：讀到的機密會留在對話紀錄裡，誰讀都一樣。需要憑證時回報要哪一個、做什麼用。
+- G50 只看讀取工具；寫 `.credentials.json` 仍由 G40 處理。
+- G50–G52 擋不到的（寫進限制）：`grep -r` 不指定檔案時掃到 `.env`；`python -c`、`node -e` 這類直譯器讀檔；`$X` 間接展開的變數名；指令輸出本身帶出的 token（例如程式把 token 印到 log）。輸出遮罩屬於下一批。
+- 仍然只是安全帶：寫進腳本再執行、變數拼出來的指令、編碼過的指令看不到（Claude Code 文件也說 Bash 權限規則不是安全邊界）。
+- 間接執行看不到：`python -c "import subprocess; ..."`、`node -e`、自己寫的腳本裡呼叫 git 或寫檔。這類情況由容器路線處理（容器裡沒有 token、沒有 push 權限），hook 不再追。
+- G02 擋不到的：用環境變數帶設定（`GIT_CONFIG_PARAMETERS`、`GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_n`）、直接改 `.git/config` 或用 `include.path` 引入的 alias。G02 會多擋只讀的 `git config get alias.p`（新語法）和不帶值的 `git config alias.p`，寧可多擋。
+- selftest 會跑每條規則的 `example_block` 和 `example_allow`（兩個身分各一次），所以規則檔加一條，案例就自動多幾個。
+
+### `--audit`（1.1.0）
+
+- `--audit <檔案>`：hook_guard 的每個 deny、ask、remind 和暫停擋下都用 `audit_log.py` 加一行 `kind=decision`（`result.status` 是 `deny` / `ask` / `remind` / `pause`），`rule` 是規則 ID（G..）、`builtin`（沒有規則 ID 的內建擋法）或 `PAUSE`。放行不寫（放行的呼叫由 PostToolUse hook 記）。
+- 紀錄寫不進去（鎖被占、磁碟滿、最後一行壞掉）時照樣做原本的決定，不會因此放行或多擋。
+
+### `--review`（1.1.0）
+
+- 預設關。要 `--rules`，而且規則檔要有 `review` 段（`model`、`timeout_s` 1–600、`categories`），否則 exit 1。目前的設定：`haiku`、45 秒、`push` / `delete` / `send` / `config`。
+- 只有「規則結論是 ask、而且這條規則的類別在 `categories` 裡」才審查。deny、內建擋法和放行都不送審，所以審查**只能把 ask 升成 deny**，不會放行任何東西。目前只有 director 有 ask（G10、G11、G20、G21、G40–G42）。
+- 執行檔：先用 `CLAUDE_CODE_EXECPATH`（目前這個 session 的 claude），沒有才找 PATH 上的 `claude`。路徑結尾是 `.py` 時用同一個 Python 跑（測試用的假 claude）。執行方式：`claude -p --model <model> --settings {"disableAllHooks":true} --tools "" --no-session-persistence --output-format json <提示>`，沒有工具、不跑 hook、不留 session。子程序帶 `DW_HOOK_REVIEW=1`，有這個變數時 hook_guard 不再審查，不會遞迴。
+- 提示只有工具名稱、遮罩過的工具輸入（`secret_mask.py`，最多 1000 字）、規則 ID 和理由；不送檔案內容。
+- 回覆的 `result` 必須剛好是 `{"verdict": "block" | "no_objection", "reason": "..."}`：
+  - `block`：改成擋下，exit 2，`BLOCKED by hook_guard [G10]: second-model review: <理由>`（理由去掉角括號、最多 300 字）。這次擋下照常算進自動暫停。
+  - `no_objection`：照舊詢問，理由後面加 `(second-model review: no objection: ...)`，仍由人決定。
+  - 逾時、exit 不是 0、找不到 claude、回覆格式不對：照舊詢問，加 `(second-model review unavailable: ...)`。
+- `--audit` 的 `rule` 欄寫成 `G10 review=block via=CLAUDE_CODE_EXECPATH`（`via` 是 `CLAUDE_CODE_EXECPATH`、`PATH` 或 `none`）。
+- NOT_VERIFIED：selftest 只用假的 claude；沒有用真的 `claude -p` 實測回覆格式、`--tools ""` 和 `disableAllHooks` 的實際效果，也沒有量真實的延遲（hook 預設逾時 60 秒，`timeout_s` 45 秒要留在它之內）。
+
+### `--pause-flag`（1.1.0）
+
+```text
+hook_guard.py --rules <tools>/guard_rules.json --profile worker --pause-flag <DIRECTOR>/PAUSE
+```
+
+- 每個工具呼叫最先檢查：旗標檔存在時，只放行規則檔 `pause` 段列的呼叫，其他一律 exit 2，stderr 是 `PAUSED by 誰 at 時間: 原因; <pause.reason>`（原因來自 `pause_ctl.py on --reason`，不會有 `<...>`）。暫停放行的呼叫接著照一般規則檢查（例如暫停時 Read `.env` 仍是 G50）。
+- `pause` 段：
+  - `allow_tools`：Read、Grep、Glob、NotebookRead、TaskList、TaskGet、TaskOutput、ToolSearch、ReadNotifications、`update_plan`、`wrap_up`；`internal_report_tools`（SendMessage）也放行，才能回報停在哪裡。
+  - `allow_mcp_read_only: true`：開頭是 get、list、read、search、query、status 的 MCP 工具放行。
+  - `allow_write`：Write / Edit / MultiEdit / NotebookEdit 只放行進度檔 `**/RESUME_STATE.md`、`**/TASK_REPORT*.md`。
+  - `allow_shell`：每個身分一組 regex。Bash / PowerShell 沒有 `run_in_background`、整行沒有把輸出寫到檔案（不在引號裡的 `>`、`>>`、`2>`、`&>`、`>|`、`>(...)`，`$(...)` 裡的也算；`2>&1`、`>&2` 只是合併串流，照常放行），而且拆出的每個子指令（`名稱 參數...`，不分大小寫）都完整比對到其中一條才放行。預設放行 `git status/log/diff/show/rev-parse`（不可帶 `--output`、`-c`）、`tasklist`、`Get-Process`、`ps`、排序和篩選輸出的指令、`pause_ctl.py status|procs`；`pause_ctl.py off` 只有 director 放行。
+- 被擋的：其他 Bash / PowerShell、背景執行、Monitor、Agent、Workflow、其他寫檔、MCP 寫入動作、`start_session`。
+- 自動暫停（規則檔 `auto_pause`，只在 `--mode block`）：worker 在 600 秒內被擋 5 次（規則擋下和內建擋法都算），第 5 次就由 hook 自己寫入旗標，第一行是 `PAUSE by hook_guard at 時間: auto: 5 denies in 600s (G02 G50 ...)`，擋下訊息後面多一行 `AUTO-PAUSED ...`。次數記在旗標旁的 `<旗標>.denies`，暫停後清空；已經暫停時的擋下不再計數。director 是 `null`，不開。解除照舊由總監跑 `pause_ctl.py off`，暫停中的 worker 只放行 `pause_ctl.py status`。`.denies` 讀寫失敗時照常擋下、不暫停，不會卡住。setup 的 hook 測試不帶 `--pause-flag`，測試的擋下不計數。`auto_pause` 格式錯（缺身分、次數或秒數不是正整數）：exit 1。
+- 給了 `--pause-flag` 卻沒給 `--rules`，或規則檔沒有 `pause` 段、`pause` 段格式錯：exit 1（配合 `onFailure: block` 等於全部擋下）。
+- 限制：旗標只擋**新的**工具呼叫，已經在跑的程式（背景批次、子程序）照跑，要依 `docs/02` 停整條程序樹，再用 `pause_ctl.py procs` 確認；含空白的路徑在 allowlist regex 裡比不到 `\S+`，會被擋（寧可多擋）。
+
+### pause_ctl.py（1.1.0）
+
+```text
+python -I -X utf8 pause_ctl.py on --director <DIRECTOR> --reason "原因" [--by 名稱]   # 寫 <DIRECTOR>/PAUSE，LOG 記 PAUSE on
+python -I -X utf8 pause_ctl.py off --director <DIRECTOR> [--by 名稱]                 # 移除旗標，LOG 記 PAUSE off
+python -I -X utf8 pause_ctl.py status --director <DIRECTOR>                         # PAUSE: on by 誰 at 時間: 原因 / PAUSE: off；exit 0
+python -I -X utf8 pause_ctl.py procs --root <PID> [--root <PID>...] [--sample 3] [--busy 0.05]
+python -I -X utf8 pause_ctl.py procs --pids-file <檔案>                              # 一行一個 PID，# 之後是註解
+```
+
+- `--flag <檔案>` 取代 `<DIRECTOR>/PAUSE`；只給 `--flag` 時不寫 LOG。`--by` 預設 `Director`。
+- `off` 只有總監能跑：worker 的 hook 在暫停時擋下它。
+- `procs` 列出給定 PID 和它們所有子孫，隔至少 `--sample` 秒讀兩次 CPU 時間（Windows 經 PowerShell 讀 `Win32_Process`，Linux 讀 `/proc`），印：
+  - `STOPPED`：已經不存在的給定 PID。
+  - `REMAINING`：還在的程序，取樣期間 CPU 秒數最多的排最前，每行 PID、PPID、CPU 秒數、名稱、指令列。
+  - `PROCS: stopped=n remaining=m busy=k`（busy：取樣期間 CPU 超過單核 `--busy` 比例）。還有程序就 exit 1。
+- 間隔用實際經過的時間算（讀一次程序表本身要約一秒）。**永遠不結束程序**：停程序照 `docs/02`，用 PID。
+- PID 被系統重新分配給新程式時會被算成 remaining：看指令列確認。
+
+### secret_mask.py（1.1.0）
+
+```text
+python -I -X utf8 secret_mask.py [FILE]          # 印出遮罩後的 FILE（沒給就讀 stdin），exit 0
+python -I -X utf8 secret_mask.py --check [FILE]  # 每種找到的機密印一行 FOUND kind，最後 SECRETS: n kind(s)；有找到就 exit 1
+python -I -X utf8 secret_mask.py --check A B C   # 2.4.0：多個檔一起查（pre-commit 一次傳多個檔）；不加 --check 只能給一個檔
+```
+
+- 範例（2.4.0，選用，DW 不依賴）：`templates/.pre-commit-config.yaml`（本機 hook：commit 前跑 `secret_mask.py --check`、push 前跑 selftest，不下載任何東西）和 `templates/.gitleaks.toml`（保留 gitleaks 預設規則，加一條使用者家目錄路徑規則）。要用就自己裝 pre-commit／gitleaks，把檔案複製到專案根目錄。
+
+- 整段換成 `[MASKED:種類]`：私鑰區塊、AWS access key、GitHub token 和 fine-grained PAT、Anthropic / OpenAI key、Slack token、Google API key、npm token、JWT。
+- 保留前段、只遮值：`Authorization: Bearer` / `Basic` / `token` 後面的值、URL 裡的密碼（`https://user:密碼@host`）、名稱含 password、passphrase、token、secret、api_key、access_key、private_key、client_secret、auth 的 `名稱=值` 或 `名稱: 值`。
+- 不遮：40 碼 git SHA、sha256、`max_tokens=4096`、`author=...`、`PWD=...`、已經遮過的值。已知會多遮：`"token_type": "Bearer"`。
+- 只認得常見格式，沒見過的 token 格式會原樣通過。也可當模組用：`mask(text)` 回傳 `(遮罩後文字, 種類清單)`。
+- `mask_tree(value)`（2.2.0）：遮罩 JSON 結構，序列化之前用。每個字串（含鍵名）都過 `mask()`；鍵名像機密（password、api_key、github_token、auth…）的整個值換成 `[MASKED:field]`，值是 null、true / false 或空字串時保留。先序列化再遮會漏掉 `password="a b"`：JSON 把引號跳脫成 `\"`，遮罩只遮到第一個空白。
+- 2.2.0 另外遮：指令字串裡跳脫的 JSON（`{\"password\": \"...\"}`）、單獨的 `Bearer <token>`（8 字以上）、`--password X` 這類空白分隔的旗標、`mysql` / `mysqldump` / `mysqladmin` / `mysqlsh` / `mariadb` / `sshpass` 的 `-p X` 和 `-pX`、`--user bob:X` 和 `curl -u bob:X`、`passw0rd`、`p@ssword` 這類鍵名；`mask_tree` 的 `Authorization`、`Proxy-Authorization`、`Cookie`、`Set-Cookie` 欄位整欄遮。還遮不到的寫法見 CHANGELOG 2.2.0 的已知問題。
+
+### audit_log.py（1.1.0）
+
+```text
+python -I -X utf8 audit_log.py append --log <檔案>                     # hook 用：stdin 是 hook 的 JSON
+python -I -X utf8 audit_log.py verify --log <檔案> [--from N] [--to M] [--anchor-log <LOG>]
+                               [--anchor-rev <commit> --anchor-path <DIRECTOR_LOG 在 repo 裡的路徑> [--repo <DIRECTOR repo>]]
+python -I -X utf8 audit_log.py verify --cite "AUDIT_RANGE file=... seq=a..b first=... last=..."
+python -I -X utf8 audit_log.py head --log <檔案>                       # 印 AUDIT_HEAD file=... seq=n sha=...
+python -I -X utf8 audit_log.py cite --log <檔案> --from A --to B        # 印 AUDIT_RANGE ...，貼進 TASK REPORT
+python -I -X utf8 audit_log.py recover --log <檔案>                    # 2.2.0：紀錄壞了，留複本、加一行 recovery 後接著寫
+```
+
+- 一行一個 JSON：`seq`、`ts`（UTC）、`session_id`、`agent_id`、`tool`、`tool_use_id`、`kind`（`result` / `failure` / `decision` / `recovery`）、`input`（工具輸入先經 `secret_mask.py` 遮罩，最多 500 字；2.2.0 起先用 `mask_tree` 遮每個字串、名稱像機密的欄位整欄換掉，再序列化，所以沒超過 500 字時是合法 JSON；超過時截斷，結尾 `…`）、`result`（`ok` / `error` / `interrupted`，或 `deny` / `ask` / `pause`；有輸出時只存遮罩後輸出的 sha256 和長度，**不存輸出本身**）、`duration_ms`、`rule`、`prev`（前一行的 hash，第一行是 64 個 0）、`hash`（其他欄位排序後的精簡 JSON 的 sha256）。
+- 多個 hook 同時寫：用 `<檔案>.lock`（`O_CREAT|O_EXCL`）排隊，等 5 秒還被占就 exit 1；超過 30 秒的鎖視為殘留，直接接手。最後一行沒寫完、不是 JSON 或 hash 不對時不再往後接，exit 1，訊息要你先 `verify` 再 `recover`。
+- Bash 輸出遮罩：`append` 發現 stdout 或 stderr 有機密時，印出 `updatedToolOutput`（欄位和原本相同，只把值遮掉），Claude 看到的就是遮過的輸出。紀錄寫不進去時仍回傳遮罩結果（exit 0）。2.2.0 起「遮罩」和「寫入」是兩個結果：寫不進去時 `hookSpecificOutput` 另加 `additionalContext`（output masked, but the audit line was NOT written），stderr 印 `audit_log: masked=yes|no written=no: <原因>`。PowerShell 工具的輸出格式 NOT_VERIFIED，不遮。
+- PostToolUseFailure 的輸入欄位（`error`、`is_interrupt`）照文件假設，NOT_VERIFIED（沒有用 `claude -p` 實際取樣）。
+- `verify`：重算整條鏈，印第一個斷點（`BROKEN seq=n: ...` 或 `BROKEN line=n: not JSON`），exit 1；檔案、錨點 commit 或錨點檔不存在 exit 2（`NOT_RUN`）。最後一行是 `AUDIT_VERIFY file=... entries=n head_seq=n [anchors=k] [cite=checked] OK|BROKEN`。
+- 錨點：總監過 gate 時跑 `head`，把 `AUDIT_HEAD` 那行寫進 `DIRECTOR_LOG.md` 並 commit。`--anchor-rev` 從 commit 裡的 LOG 讀（`git show <commit>:<路徑>`），所以改工作樹裡的 LOG 騙不過；`--anchor-log` 讀目前的檔案。同一份紀錄（絕對路徑相同）的每個錨點都要還在鏈上、hash 相同；一個錨點都沒有也算失敗。
+- **沒有錨點就抓不到整條重寫**：把整條鏈連同每個 hash 重算一次，`verify` 單獨跑會過，只有錨點抓得到。最後一個錨點之後的行被截掉，也要等下一個錨點才抓得到。
+- `--cite`：TASK REPORT 的 `AUDIT_RANGE` 那一段的第一行和最後一行 hash 要和現在的紀錄相同，整條鏈也要完整。
+- **`recover`（2.2.0）**：`verify` 說 BROKEN（當機截斷最後一行、某行不是 JSON、某行不在鏈上）後用。在鎖內把整份原檔原封不動複製成 `<檔案>.damaged-<UTC 時間>`，保留第一個壞行之前的每一行（最後一個好 hash 和之前的 `AUDIT_HEAD` 錨點都還有效），再接一行 `kind=recovery`：`damage` 記拿掉部分的起始行、行數、位元組、sha256，以及複本的檔名和 sha256。印 `AUDIT_RECOVER ...` 和新的 `AUDIT_HEAD`，之後 `append` 照常接著寫。壞行之後的行只留在複本裡。沒壞的紀錄不動（`nothing broken`，exit 0）；檔案不存在 exit 2。
+- `verify` 對每個 recovery 行印 `GAP seq=n: from line a (k lines, b bytes, sha256=...) kept in <複本>, copy checked`，結尾加 `gaps=n`。GAP 本身不算壞；複本找不到時標 `copy not found`，並多印一行 `~ warning seq=n: ...`；有給錨點（`--anchor-log` / `--anchor-rev`）時算 BROKEN（錨定的紀錄少了證據）。複本內容被改過（sha256 對不上）也是 BROKEN。整條鏈壞掉時多印一行 `~ to go on writing: audit_log.py recover --log ...`。
+
+## doctor.py（1.1.0）
+
+```text
+python -I -X utf8 doctor.py [--repo <worktree>]                 # 讀設定、跑一次 hook，不寫任何檔
+python -I -X utf8 doctor.py --probe                              # 在 Claude 的 Bash 工具裡跑：看子程序實際拿到的環境
+python -I -X utf8 doctor.py --probe --director <DIRECTOR>        # 容器裡：再查隔離六項
+```
+
+- 每項一行，等級：
+  - `ENFORCED`：生效，而且這次查過（hook 實際跑過、紀錄鏈驗過）。
+  - `CONFIGURED_NOT_VERIFIED`：設定在，但這次證明不了它有用。
+  - `NOT_ENFORCED`：沒生效（有設定把它關掉、claude 版本太舊）。
+  - `MISSING`：沒設定。
+  - `WARN`、`INFO`、`VERSION` 只是說明，不算失敗。
+- 啟動資料夾（1.3.0）：settings 只從 session 啟動的資料夾讀。doctor 從 `~/.claude/projects` 的對話紀錄數出最近 `--launch-days` 天（預設 30）各 worktree 啟動過幾個 session，印 `INFO launch:`。有防護、卻沒有 session 從那裡啟動，印 `settings unread`；session 從沒有防護的 worktree 啟動、別的 worktree 卻有，印 `WARN launch folder unguarded`。有 `--sessions` 檔時，權限一項取各角色最寬鬆的結論，並檢查檔案權限。
+- 最後一行 `DOCTOR: enforced=n not_verified=m not_enforced=k missing=j warn=w`；有 NOT_ENFORCED 或 MISSING 就 exit 1。不在 git repo 裡 exit 2。沒有 git 程式（2.1.0）也是 exit 2，印 `doctor: git not found (...)` 和裝 Git 或放上 PATH 的提示，不再當掉；git 拒絕讀別人擁有的 repo（dubious ownership）時另外說明。
+- **原生 Windows 上 doctor 一定 exit 1**：`isolation: NOT_ENFORCED (native Windows, no OS-level isolation for shell)`。這是實話，不是設定錯。
+- claude 版本：
+  - 生效的那個依序取 `CLAUDE_CODE_EXECPATH`、`CLAUDE_PID` 那個程序的執行檔、PATH 上第一個 claude。另外列出 PATH 上每一個，以及 `~/.local/bin` 和 npm 全域資料夾裡不在 PATH 上的（標 `other`）。版本來自 `<exe> --version`，只在本機印，不呼叫模型。
+  - 生效版本 < 2.1.295：沒有 `onFailure`，hook 壞掉時會放行 → `hook_guard: NOT_ENFORCED`。
+  - Windows 上 < 2.1.310 而且找不到 Git Bash → `hook without Git Bash: NOT_ENFORCED`。
+  - < 2.1.314：Monitor 的指令不經過 hook → `Monitor commands: NOT_ENFORCED`。
+  - PATH 上任何一個 < 2.1.295 → `WARN`（PATH 順序一變就會用到它）。要不要移除或更新由 PO 決定，doctor 不動它。
+- 設定層：使用者（`~/.claude/settings.json`）、專案（`.claude/settings.json`）、本機（`.claude/settings.local.json`）、managed（Windows `%ProgramFiles%\ClaudeCode\managed-settings.json`，其他 `/etc/claude-code/managed-settings.json`）。hook 和權限清單各層相加；`env` 的鍵和 `defaultMode` 取最高一層的值；任一層 `disableAllHooks: true` → 所有 hook 項目 NOT_ENFORCED。
+- `hook_guard`：要有 matcher `*`、`onFailure: block`、`--profile` 的項目，再實際跑一次（和 setup 的 hook 測試相同，依 `--mode` 判斷，不帶 `--audit`、`--pause-flag`、`--review`）。ENFORCED 那行寫出模式（`mode remind` 等）。
+- `audit_log`：PostToolUse 和 PostToolUseFailure 都要指到同一份紀錄；紀錄存在就跑 `verify`。
+- `permissions`：依 hook 的 `--mode` 算要的清單。規則檔對這個 profile 產生的每一條都在 → CONFIGURED_NOT_VERIFIED（由 Claude Code 執行，doctor 無法實測）。remind 模式只要機密規則（G50）的 deny，就寫 `remind mode: only the secret rules' deny is written`；清單裡還留著這個模式不要的規則權限（例如從 block 換成 remind 卻沒重跑 setup）→ MISSING，因為那條照樣會擋。`defaultMode` 是 `bypassPermissions` → WARN。
+- `env_scrub`：設定在但沒加 `--probe` → CONFIGURED_NOT_VERIFIED。`--probe` 只看**變數名稱**：名稱像憑證（token、secret、password、api key 等），或 proxy 變數的值帶 `帳號:密碼@`，就 NOT_ENFORCED 並列出名稱。**值一律不印**；selftest 用一個假的 token 值確認輸出裡沒有它。SCRUB 開著時 `GITHUB_TOKEN`、`GH_TOKEN`、proxy 帳密照樣會被列出，因為官方設計就保留它們。
+- `isolation`：不在容器裡 → NOT_ENFORCED。在容器裡（`/.dockerenv`、`/run/.containerenv` 或 cgroup 顯示 docker / containerd / kubepods / libpod）→ CONFIGURED_NOT_VERIFIED；加 `--probe` 再查六項，六項都過才 ENFORCED：根目錄寫不進去、`--director` 的資料夾寫不進去、連不上 `example.com:443`、`example.com` 解析不到（DNS 白名單）、`.git` 是 worker 自己的（K1）、沒有像憑證的變數名稱。`--probe` 在容器裡會試連一次外部網路、查一次 DNS。
+  - K1：`run_worker.sh` 會設 `DW_GIT_MODE`。`--git-common` 開的容器（`DW_GIT_MODE=shared`，或 linked worktree，它的 `.git` 就是 repo 的）不加 `--probe` 也直接報 NOT_ENFORCED（K1 shared .git）。`worker_clone.sh` 做的 clone（`DW_GIT_MODE=clone`、不是 linked worktree）在 `worktree` 那一項算 ENFORCED（the worker's own clone）。容器外不看 `DW_GIT_MODE`。
+- `worktree`：linked worktree → ENFORCED；主 checkout → NOT_ENFORCED。director profile 不查。
+- 暫停旗標的狀態、`--review` 有沒有開（開著會吃 `claude -p` 額度）印成 INFO。
+
+## context_probe.py
+
+```text
+python -I -X utf8 context_probe.py --cwd <project>
+python -I -X utf8 context_probe.py --claude <path-to-claude> --cwd <project> --json-out <file>
+```
+
+- 送兩行 control request（initialize、get_context_usage）給 `claude --input-format stream-json --output-format stream-json --verbose --no-session-persistence`，讀回應後結束。
+- **不要改用 `claude -p "/context"`**：那會呼叫模型、花額度。
+- 兩行之間等 `--wait` 秒（預設 20）讓 MCP 連上；一啟動就問會漏掉 MCP 那幾列。印出 `note: no MCP tokens` 而專案有用 MCP 時，加大 `--wait` 重跑。
+- 回應欄位隨 CLI 版本可能不同；拿不到時印 `NO_ANSWER`。
+
+## usage_report.py
+
+```text
+python -I -X utf8 usage_report.py                         # 目前資料夾對應的專案
+python -I -X utf8 usage_report.py --project-dir <name> --project-dir <name2> --since 2026-01-01
+python -I -X utf8 usage_report.py --all --json-out <file>
+```
+
+- 只印數字，不印對話內容。輸出可能很長時用 `--json-out` 存檔，對話只看結論。
+- 找不到紀錄時印 `NO_DATA` 並 exit 1，不是實測的 0。
+- 3.0.0（D7）：usage 欄位不是非負數（布林值、文字、負數、無限大、整個 usage 不是物件）時，那個值算 0，結果多 `partial: true`、`invalid_count`、`invalid_fields`，再印一行 `PARTIAL usage: …` 列出前五個欄位和值。這時總數是下限，不是實測值。exit code 不變。
+
+## memory_size_check.py
+
+```text
+python -I -X utf8 memory_size_check.py --file <memory-index> [--max-bytes 6144]
+python -I -X utf8 memory_size_check.py --kind resume --workstreams <DIRECTOR>/ACTIVE_WORKSTREAMS.md   # 2.2.2：巡查量所有工作線
+python -I -X utf8 memory_size_check.py --kind resume --glob "<WS>/**/RESUME_STATE*.md" [--config director_work.json]
+python -I -X utf8 memory_size_check.py --kind resume --file A.md --file B.md
+python -I -X utf8 memory_size_check.py --chain CLAUDE.md DIRECTOR/RESUME_STATE.md ...   # 3.0.0：一條必讀鏈
+python -I -X utf8 memory_size_check.py --chain README.md BOOTSTRAP.md ... --rules-file AGENTS.md   # 3.0.0 B19：加平台規則檔的 DW 段落
+```
+
+- 只給一個 `--file`、不加 `--kind` / `--glob` / `--workstreams`：和 2.2.1 一樣的單檔報告。
+- 2.2.2 多檔模式：每檔一行 `OK  ` / `OVER <路徑>: <bytes> (limit), ~<token>, longest line <行號>: <bytes>`，`--kind resume` 另印 `movable <bytes>`（`resume_archive.py` 會搬走的量）；最後一行 `SIZE: PASS|OVER|MISSING files=n over=n [missing=n]`。超過或找不到 exit 1。只讀。
+- `--kind resume` 上限 20480 bytes、單行 4096 bytes（`--config` 讀 `resume.max_bytes`、`resume.max_line_bytes`；`--max-bytes`、`--max-line-bytes` 優先）。`--kind memory` 上限 6144、不查單行。token 是 bytes / 2 的估計。
+- `--workstreams` 讀 ACTIVE_WORKSTREAMS.md 表格裡表頭含 RESUME 的那一欄（沒有就找文字裡的 `...RESUME_STATE*.md`）；相對路徑從那份檔案的資料夾算；NONE、`-`、`<...>` 略過。glob 找不到檔、登記的路徑不存在都算 missing。
+- `--chain FILE...`（3.0.0，D4，取自 dshdw）：開工前一起讀的那幾個檔算一條鏈。每檔一行 `CHAIN <路徑>: <bytes> bytes (LF n), ~<token> tokens`（CRLF 檔才印 LF），再列兩個檔共有、連續 3 行以上的段落 `DUP a:行-行 = b:行-行 (n lines)`（空行略過，只有標點的行不當開頭），最後一行 `CHAIN: PASS|FAIL|INVALID|MISSING files=n bytes=N (limit M) lf_bytes=N ~tokens=N dups=n [invalid=n] [missing=n]`。上限預設 24576（24 KB 必讀上限），`--max-bytes` 可改；超過是 FAIL，空檔或不是 UTF-8 是 INVALID，找不到是 MISSING，都 exit 1。重複段落只列出，不算失敗：照「加一條就併掉一條」自己決定留哪份。只能和 `--max-bytes`、`--rules-file` 一起用。只讀。
+- `--rules-file FILE`（3.0.0 B19，配 `--chain`，可給多次）：平台每輪都載入的規則檔（`AGENTS.md`、`CLAUDE.md`、`.agent/rules/*.md`）裡的 DW 段落也算進鏈：從第一個寫著「總監制」「Director mode」或「DIRECTOR-WORK」的標題，到下一個同級或更高級標題的前一行（沒有就到檔尾），``` / ~~~ 圍起來的標題不算。那一行印 `CHAIN <路徑> [DW section lines a-b]: ...`；找不到這種標題就整檔算（`[whole file: no DW heading]`）。最後一行多 `rules=n`。基板的共用必讀檔（`BOOTSTRAP.md` 和每輪必讀的 docs）以 CRLF 量，要留至少 2,560 bytes 給這一段（selftest `test_chain_size_300`；目前約 2,893）。變體裡這組改量「變體自己的鏈＋它的規則檔段落 ≤ 24 KB」：段落在 `adapters/<名>/VARIANT.json` 用 `"rules_section": "<checkout 內的路徑>"` 指定，沒寫就量 `templates/CLAUDE_PROJECT_SECTION.md`。
+
+## resume_archive.py（2.2.2）
+
+```text
+python -I -X utf8 resume_archive.py <RESUME_STATE.md>             # dry-run：列出可搬 / 保護的部分和搬後 bytes / token，不寫檔
+python -I -X utf8 resume_archive.py <RESUME_STATE.md> --execute   # 先寫 .bak，搬移，驗證；不過就還原，exit 1
+```
+
+- 「壓縮」只代表原文搬移：搬走的內容一字不改附加到同資料夾 `RESUME_HISTORY_<YYYYMMDD>.md`，原處留索引（段落：一行 `> RESUME_ARCHIVED: <開頭> | <日期> | <歷史檔> | sha256=<16 位>`；表頭 `Before:` 鏈：行尾 `[RESUME_ARCHIVED: n older entries | <日期或 ?> | <歷史檔> | sha256=<16 位>]`）。
+- 永遠不動：四行表頭（仍是四行，只搬 `Before:` 鏈較舊的尾段）、有 `UPDATED:` 的段落、標題 / 空行 / 舊索引、標題或開頭含 `resume.protect_headings` 的段落、最新 `resume.keep_recent`（10）筆。近期只用筆數算，不看幾天前。
+- 段落：空行或標題之間的一塊；整塊是清單時每個項目一段。段落用裡面最晚的完整日期（YYYY-MM-DD、YYYY/MM/DD、YYYYMMDD）排先後，日期只用來排順序；和第 10 筆同一天的也留下。沒有完整日期的段落排不出先後，留下並印 `~ shadow: RESUME_ORDER`。
+- `Before:` 鏈：順序就是鏈本身（新到舊），保留現況文字和前 10 筆，更舊的搬走。有一筆是空的，或開頭的 `(YYYY-MM-DD HH:MM)` / `(MM-DD HH:MM)` 顯示後面的比前面的新，整行不動並印 `~ shadow: RESUME_HEADER ...`。索引的日期是搬走的最新一筆的日期，讀不到寫 `?`。
+- `--execute` 驗證三項：(a) 歷史檔逐字、依序含所有搬走的內容，舊內容沒變 (b) 留下的部分 sha256 不變、依序、表頭仍是同樣四行 (c) 把搬走的內容放回索引處＝原檔（逐 byte）。任一項不過：從 `.bak` 還原 RESUME_STATE、歷史檔還原成原樣，印 `ARCHIVE: FAIL restored=yes` 並 exit 1。`.bak` 不刪；同名 `.bak` 已存在就不做（exit 2）。其他檔不動。
+- 全部可搬的搬完仍超過上限，印 `~ shadow: RESUME_SIZE protected part over limit`，保護部分不動，交總監人工判斷。
+- 設定：`--config director_work.json`（預設讀檔案旁邊那份），`--keep-recent` 優先；`--today YYYY-MM-DD`（歷史檔名的日期）給測試用。不是 UTF-8 就不讀（exit 2）。
+
+## gate_check.py
+
+```text
+python -I -X utf8 gate_check.py --resume <RESUME_STATE.md> [--strict] [--config director_work.json]   # 2.2.2 起含大小（shadow）
+python -I -X utf8 gate_check.py --order <WO.md> --report <報告.md> --verdict <裁決.md>
+python -I -X utf8 gate_check.py --verdict <裁決.md> --match <報告.md> <WO.md> --candidate <40 位>   # 裁決要指向這張工單的這個版次和這個 commit
+python -I -X utf8 gate_check.py --match <報告.md> <WO.md>     # 逐條對照驗收條件
+python -I -X utf8 gate_check.py --match <報告.md> <WO.md> --evidence-dir <證據資料夾>   # 再核對 AUTO 的證據紀錄
+python -I -X utf8 gate_check.py --match <報告.md> <WO.md> --dispatch-log <DIRECTOR_LOG.md>   # 再和派工紀錄的雜湊比
+python -I -X utf8 gate_check.py --match <報告.md> <WO.md> --evidence-dir <證據資料夾> --dispatch-log <DIRECTOR_LOG.md> --candidate <40 位>   # Strict 的審查要三個都給
+python -I -X utf8 gate_check.py --test-request <申請.md>       # TEST REQUEST 欄位齊、單位 GiB、寫入量涵蓋 build + 擷取 + 快取（1.3.0）
+python -I -X utf8 gate_check.py --hash <WO.md>                # 印工單 SHA-256（CRLF 當 LF 算）和要記進 LOG 的 DISPATCH 行
+python -I -X utf8 gate_check.py --report-skeleton <WO.md> [--repo <checkout>] [--evidence-dir <證據資料夾>] [--out <報告.md>]   # 3.0.0 B8：印 TASK REPORT 骨架和收尾指令
+python -I -X utf8 gate_check.py --preflight <報告.md> <WO.md> --evidence-dir <證據資料夾> --dispatch-log <DIRECTOR_LOG.md> --repo <受信任的 checkout>   # 舊審查升到新 Strict 前缺什麼
+python -I -X utf8 gate_check.py --order <WO.md> --repo <專案 checkout> [--strict-base] [--config director_work.json]   # 2.2.2：BASE_REF 新鮮度
+python -I -X utf8 gate_check.py --after-verdict <裁決.md> [<裁決.md> ...] --repo <專案 checkout> [--orders <工單資料夾>] [--warn]   # 2.2.4，2.2.5 起預設 FAIL
+python -I -X utf8 gate_check.py --sequence <WO.md> [<WO.md> ...] --dispatch-log <DIRECTOR_LOG.md> --repo <專案 checkout>   # 2.2.5：閘門順序
+python -I -X utf8 gate_check.py --final <DIRECTOR 資料夾>   # 2.2.5：最終驗收的端到端證據
+```
+
+- 每個檔案印一行 `OK` / `FAIL`，有問題逐條列出；任何一個失敗就 exit 1。
+- `--resume`（2.2.2）：檔案超過 `resume.max_bytes`（20480）或任一行超過 `resume.max_line_bytes`（4096）時印 `~ shadow: RESUME_SIZE <bytes> ... ~<token> tokens, longest line <行號>: <bytes>`，exit code 不變；加 `--strict` 才判不過。上限從 `--config`、檔案旁邊的 `director_work.json`、預設值依序取。瘦身用 `resume_archive.py`。
+- `--order` 的 BASE_REF 新鮮度（2.2.2，從 DW-DS ds.3 移植）：在 `--repo`（預設是工單所在資料夾）先 `git fetch <remote>`（同一 repo 和 remote 一次執行只 fetch 一次），再拿 BASE_REF 的 commit 比遠端分支：一樣印 `~ BASE_REF <commit> = origin/main (fetched now)`；commit 不存在或落後印 `~ WARN BASE_REF: ...`（落後幾個 commit、該從哪裡開工），加 `--strict-base` 判不過。fetch 失敗、資料夾不是 git checkout、沒有 remote，都印 `not compared with the remote: ...`，不當作通過。BASE_REF 沒寫 commit（7–40 位十六進位）就不檢查、不印。開關：`director_work.json` 的 `"base_ref": {"check": true, "fetch": true, "strict": false}`，讀 `--config`，否則工單資料夾或上一層的 `director_work.json`。
+- `--after-verdict`（2.2.4，shadow）：在 `--repo` 解出每份裁決的 `CANDIDATE_HEAD:`，取其他候選都在它之前的那個（分不出就取 commit 時間最新的）當最後一份裁決。從它到 HEAD 的每個 commit，只要改到裁決 `ORDER:` 那張工單 SCOPE 以外、又不是文件的檔，就印 `~ WARN LATE_COMMIT <sha> <標題>: <檔案>`，exit code 不變；加 `--strict` 印 FAIL、exit 1。文件指 `DIRECTOR/` 資料夾底下的檔，和 `.md`、`.rst`、`.txt`。工單依序在 `--orders`、裁決所在資料夾、`../orders` 找；找不到就把每個非文件的檔都算進去，並在標題寫明。候選解不出、HEAD 不含候選，印 `NOT_CHECKED`，不當作通過。只讀（`git rev-parse`、`rev-list`、`diff`、`log`）。
+- `--after-verdict` 2.2.5 起（WO-DW-225 B4）：預設 FAIL（`~ FAIL LATE_COMMIT`，exit 1），工單 SCOPE 裡的程式碼也算；文件多了頂層 `docs/` 資料夾。裁決的 `CANDIDATE_HEAD` 已不在 HEAD 的歷史裡（分支被改寫）印 `~ FAIL REWRITTEN`。`--warn` 回到 WARN、exit 0（導入舊專案用）；`--strict` 照收，等於預設。**這是有意改變的行為**：2.2.4 會過的「裁決後只改 SCOPE 內程式碼」現在不過，要再審、寫指向新 commit 的裁決。
+- `--sequence`（2.2.5，B3，Standard / Strict；Direct 印 SKIP）：
+  - 核准要早於 worker 的第一個動作。核准是 LOG 裡最早一行整行的 `PLAN_APPROVED <WO-ID> ...`，沒有就用最早的 DISPATCH 行；時間取那一行的 `<日期 時間 [時區]> |` 欄，沒有就取上方最近的有日期的標題或行。LOG 只往下加，所以比上面的行（標題除外）還早的時間，當作上面那行的時間。第一個動作是 `git log --all` 裡標題以工單編號開頭的最早 commit（author 時間）。核准晚於它、或完全沒有核准，FAIL；沒有 commit 或核准沒有時間，印 NOT_CHECKED 提示。
+  - 每張工單要有自己的規格審查：LOG 裡整行 `SPEC_REVIEW <WO-ID> tokens=.. issues=.. adopted=..`，或 `reviews/` 下檔名含工單編號的 `*SPEC_REVIEW*` 檔（照 DW-DS ds.4 B4 的做法搬回）。都沒有就 FAIL。
+  - 審查要來自別的 session：規格審查的 `session=`（或審查檔的 `SESSION_ID:`）要和寫工單的（DISPATCH 行 `| session=`，或工單的 `SESSION_ID:`）不同；裁決（檔名含 VERDICT 和工單編號）的 `SESSION_ID:` 要和 TASK REPORT 的不同。相同 FAIL，缺一邊印 `~ WARN SESSION`。
+  - 每張工單印一行 `OK` / `FAIL` / `WARN` / `SKIP sequence <工單> (GOVERNANCE x)`。只讀（`git log`）。
+- `--final <資料夾>`（2.2.5，B5）：DIRECTOR 資料夾（或含 `DIRECTOR/` 的資料夾）的 `evidence/E2E/` 沒有非空的檔就 FAIL。3.0.0（D2，硬底線）：還要真的跑完而且成功——任何紀錄有非零結束碼（`EXIT_CODE: 1`、`exit=1`、`Command exited with code 1`），或有一行以 `FAIL`、`FAILED`、`ERROR:`、Python traceback 開頭，或有一行 `RESULT`／`STATUS`／`VERDICT: FAIL|FAILED|ERROR|BLOCKED|PARTIAL`（3.0.0 B2，取自 agy.6；不分大小寫），或寫了「N failed」（N ≥ 1），就 FAIL；至少一份紀錄要有明確的成功結束（`EXIT_CODE: 0` 或 `RESULT: PASS`），否則 `E2E_INCOMPLETE`；不是 UTF-8 文字的紀錄也 FAIL（`evidence/E2E/` 只放文字 log）。舊的失敗紀錄留著會一直擋，修好重跑後把它移到別的資料夾（例如 `evidence/E2E_old/`）。3.0.0 B12（取自 agy 2.6.0-agy.5）：`--final <資料夾> --skip-old-e2e` 不算 `CANDIDATE:` 寫的是 DELIVERY.json 候選以外 commit 的紀錄（每份印一行 `~ E2E_SKIPPED`，交付合約那邊也一樣）；全部都是舊紀錄就 FAIL（交付的 commit 沒有紀錄）；沒寫 `CANDIDATE:` 的紀錄照算。預設關，維持現在的嚴格做法；`--skip-old-e2e` 只配 `--final`。`--warn` 對 `--final` 無效。提示（不會 FAIL）：E2E 紀錄沒有 `ENTRY_POINT:` 行；DECISION_REGISTER.md 的 DD 表沒有「驗收案例」欄，或某條 DD（SUPERSEDED 除外）的驗收案例是空的，印 `~ WARN DD_CASE`。
+- 長路徑（2.2.5，B11）：git 報 `Filename too long` 時，`gate_check` 和 `scope_check` 印一行 `path too long for git on Windows: <路徑> (<n> characters, <m> over the 259 Windows allows)`，再附處理方式（換短一點的 origin／worktree 資料夾），不只轉出 git 原本的 fatal。
+- 沒填的範本一定不過（`<...>` 算沒填）。工單的 SCOPE / FORBIDDEN 不能寫 `**` 或「相關檔案」這類話。
+- RESULT 寫 PASS 但有 `NOT_RUN` 的測試、越界或沒查範圍，都不過。
+- 只查格式和用詞，內容對不對要看證據。
+- `  ~ ` 開頭的是提示，不會讓檔案失敗：舊格式工單沒有「類型」欄、沒有 REVISION 或 TRACES_TO、驗收表還有結果欄，報告沒有 ACCEPTANCE 表。照新範本補上就不會再出現。
+- 工單有 `REVISION` 就要是數字；大於 1 時 H 節變更紀錄要有 2 到 n 每一版的列。「類型」只能是 `AUTO / REVIEW / PO`。
+- 工單可以加 `CHECKS:` 清單，每條 AUTO 條件一行 `- AC-1: ["python", "-I", "-m", "unittest", "tests.test_parser"]`：總監核准的檢查指令，JSON 字串陣列，不經 shell。工單雜湊包含它，所以派工時的 DISPATCH 行已經把它鎖住。`--order` 查格式（要能解析成非空的字串陣列）、AC 要存在而且類型是 AUTO、同一 AC 不能寫兩行；Strict 工單有 AUTO 條件卻沒有 CHECKS 只印提示。` #` 之後會被當成註解切掉；指令裡要有 ` #` 時，整個項目用反引號包起來。
+- `--match 報告 工單`（可重複）：工單每條 AC 在報告都有一列，不多不少；狀態要在該類型允許的範圍（`vocabulary.json` 的 `ac_worker_statuses`），所以 REVIEW 或 PO 條件填 PASS 會失敗；PASS 要有證據、PASS / FAIL 要寫實際；有一列是 FAIL / BLOCKED / UNVERIFIED 時 RESULT 不能是 PASS；報告的 `ORDER_SHA256` 要和工單現在的雜湊相同。工單沒寫類型的 AC 當 AUTO 查，另印提示。同時給 `--order` 和 `--report` 不會自動對照，行為和以前一樣。
+- 驗收表（工單和報告都查）：同一個 AC 出現兩列、表頭有兩欄同名、某列欄數和表頭不同，都失敗，不會悄悄取最後一列。反引號裡的 `|` 和寫成 `\|` 的 `|` 不會被當成欄位分隔。
+- `--evidence-dir <資料夾>`（配 `--match`）：AUTO 條件填 PASS 時，證據欄要寫 `evidence_record.py` 產生的 `.json` 檔名，檔案在這個資料夾裡；紀錄的指令 exit 0、沒逾時、產物沒有缺；紀錄的 git HEAD 要和報告的 HEAD 相同，所以最後一次 commit 之後再記。檔案要有 `run` 寫的每個欄位而且型別正確（`schema, label, command, cwd, started, finished, exit_code, timed_out, git, artifacts`），缺一個或型別不對就不算證據，例如只有 `{"exit_code": 0}` 的檔案會失敗；沒有 `schema` 的舊紀錄照舊讀。舊紀錄、沒有 git HEAD 的紀錄、紀錄時有未提交的改動、label 不是這條 AC：Strict 失敗，Standard 只印提示；一份紀錄要給兩條 AC 共用，label 寫兩個（`--label "AC-1 AC-2"`）。Strict 另外要 `schema` 是這版讀得懂的（Standard 提示），`git.dirty` 要明寫 false。紀錄列出的產物會重新算雜湊（相對路徑以紀錄的 cwd 為準），不見或變了：Strict 失敗，Standard 提示；沒有 cwd 的舊紀錄不重算，只提示。報告的 HEAD 要是 7 到 40 位十六進位：Strict 失敗，Standard 和 `--report` 只印提示。工單有 CHECKS 時，紀錄的 command 要和這條 AC 核准的指令完全相同：Strict 失敗，Standard 提示。用 `run --order <WO.md>` 記的紀錄有 `order` 欄（工單 ID、REVISION、雜湊；雜湊和 `--hash` 印給 DISPATCH 行的是同一個），要和工單現在的 ID、版次、雜湊相同；工單改版後要沿用舊證據，總監在 `--dispatch-log` 寫整行 `EVIDENCE_EQUIVALENT <WO-ID> rev=<舊> sha=<舊雜湊> to rev=<新>`（和 DISPATCH 行一樣只認整行，引文、縮排、code fence、寫在別的句子裡都不算），否則 Strict 失敗、Standard 提示。沒有 `order` 欄的紀錄：REVISION 1 照收，印 `WARN evidence not bound to the order`（下一個 MAJOR 起必填 `--order`）；REVISION 2 以上 Strict 失敗、Standard 提示。不加這個參數就和以前一樣，只查有沒有寫證據。這裡只讀紀錄、不重跑；只有 `evidence_record.py verify --rerun --order ...` 才算重跑驗證。紀錄是 worker 自己寫的 JSON，只證明指令跑過而且通過，不證明它測對了東西。
+- `--dispatch-log <DIRECTOR_LOG.md>`（配 `--match`）：LOG 裡要有 `DISPATCH <WO-ID> rev=<n> sha=<64 位雜湊>` 一行（`--hash` 會印好給你貼；WO-ID 是工單標題第一個字或檔名，同一工單以最新一行為準），工單現在的雜湊要和它相同。worker 改工單（放寬條件、刪 REVIEW / PO 列、把 REVIEW 改成 AUTO）後重算 `ORDER_SHA256`，報告和工單彼此一致，只有這條會查出來。DISPATCH 必須獨占一行（前面可有 `<日期> |` 欄、後面可有 `| <依據>` 欄）；寫在說明裡、縮排、`>` 引用或 ``` / ~~~ 圍欄裡的都不算。LOG 沒有這張工單的紀錄：各治理模式都失敗。工單標題和檔名的編號要一致，報告 ORDER 行也要指向這張工單。最新一行的 `rev=` 要等於工單的 REVISION，不同就失敗。
+- 報告的 `ORDER: <檔名> REVISION <n>` 要和工單的 REVISION 相同，不同就失敗（報告回答的是另一版工單）；沒寫 REVISION：Strict 失敗，Standard 提示。
+- `--candidate <40 位>`（配 `--match`）：審查的 commit，總監自己用 `git rev-parse <worker 分支>` 取得，不抄報告。報告的 HEAD 要是它（Strict 以外前綴相同即可），每份證據紀錄的 git HEAD 也要是它（Strict 要完全相同）。不是 40 位十六進位就 exit 2。
+- **Strict 的審查綁在一個 commit 上**：Strict 工單做 `--match` 時，沒給 `--candidate`、沒給 `--dispatch-log`、有 AUTO 列填 PASS 卻沒給 `--evidence-dir`、報告 HEAD 不是完整 40 位，都失敗；舊紀錄和沒有 git HEAD 的紀錄也失敗。v0.12 的 Strict 審查指令要補上這三個參數。
+- `--preflight 報告 工單`（可重複，只讀）：舊版本做的審查要照現在的 Strict 重審前，逐項列出缺什麼，一項一行 `LACKS`：報告 HEAD 不是 40 位（給 `--repo` 時在那個 checkout 解出完整 commit；解不出來就要 worker 重交）、報告 `ORDER:` 行沒寫 REVISION、LOG 沒有這一版的 DISPATCH 行、AUTO 條件沒有 CHECKS（要用核准重跑就要補）、證據紀錄沒有支援的 schema、git.head 不是 40 位或 `git.dirty` 不是 false（要重新收證）。沒給 `--evidence-dir` / `--dispatch-log` 的部分印 `NOT_CHECKED`。有缺就 exit 1。
+- `--report-skeleton <WO.md>`（3.0.0 B8，取自 dshdw 2.2.2-ds.3）：照工單印一份 TASK REPORT 骨架，ORDER、ORDER_SHA256（和 `--hash` 同一個值）、治理模式、HEAD／分支（`--repo`，預設工單所在的 repo；detached 不寫分支）、WORKTREE 行（用 `worktree.py` 算）、E 節每條 AC 一列都先填好，其餘留 `<...>`；後面印收尾要跑的指令：有 CHECKS 的 AUTO 條件印 `evidence_record.py run --order`，再印 `scope_check.py` 和 `gate_check.py --match`（Strict 另加 `--candidate` 和 `--dispatch-log`），路徑有空白會加引號。`--out <檔>` 把骨架寫進檔案、已有的檔案不覆蓋（exit 1）；不加 `--out` 時骨架和指令都印出來，指令段在 `=== COMMANDS (not part of the report) ===` 之後。只能單獨用，不能和其他模式一起。骨架沒填完就交件，`--report` 會因為留著 `<...>` 失敗。
+- `--hash`：派工時記下，交件時比對。**這是事後偵測，不是事前防止**：任何人都還是改得動工單，只是改了會被查出來；沒有派工紀錄就查不出「改完重算」。
+- 固定用詞（判定、下一步、RESULT、治理模式、證據等級）只在 `vocabulary.json` 定義；改用詞時改它，再改 selftest 點名的文件和範本。
+- **初衷卡與 PO 看過的紀錄（2.1，shadow：只加 `~` 提示，exit code 不變；沒有新欄位的舊工單照樣通過）**：
+  - `--brief BRIEF.md` 單獨用：印 `BRIEF_REVISION = <版次>` 和 `BRIEF_FINGERPRINTS_V1 = {"B-2": "<64 位>"}` 兩行，貼進工單表頭。指紋是 sha256(`brief-row-v1\n` + `[ID, 類別, 內容, 怎麼算做到]` 的精簡 JSON)；同一編號兩列或欄數不是 4，印 `~ BRIEF_UNCONFIRMED`（依據未確認），不給指紋。
+  - `--brief` 配 `--order` / `--match` / `--preflight`：工單記的列變了，印 `~ BRIEF_STALE <WO> <B> <AC-1,AC-2>`（舊條件驗過，新條件待重驗）；工單沒有追溯欄時寫 `WHOLE_ORDER`；版次沒升卻內容變了另註「同版內容有變」；列被刪掉寫「需求已取消，待調整範圍」。工單追溯了 B 卻沒記指紋，印 `~ BRIEF_UNCONFIRMED`。
+  - `--brief BRIEF.md --snapshot <資料夾>`：只收狀態 LOCKED、有版次的初衷卡，否則 exit 2。快照原子寫入：同資料夾暫存檔、fsync、改名；同內容的舊檔保留。寫完印 `BRIEF_LOCKED rev=<n> sha=<雜湊> snapshot=<路徑>`，整行寫進 DIRECTOR_LOG。再加 `--dispatch-log` 時，以最新一行 BRIEF_LOCKED 為依據：現在的初衷卡不是它（例如定版後的草稿），就改拿快照比，並印 `compared with the locked snapshot`。
+  - `--hash <WO.md> --snapshot <資料夾>`：另存 `<WO-ID>-rev<n>-<雜湊>.md`。`--match ... --order-history <資料夾>`：用 EVIDENCE_EQUIVALENT 沿用的證據，拿舊工單記的指紋比；條件變了印 `BRIEF_STALE`，找不到舊工單印 `BRIEF_UNCONFIRMED`（沿用依據未確認）。2.2 起 `evidence_record.py verify --rerun` 加 `--brief` / `--order-history` 也用同一個函式做這項比對（見 evidence_record 第 10 點）。
+  - `--po-acceptance PO_ACCEPTANCE.json [--candidate <40 位>]`：檢查 PO 驗收紀錄（schema `po-acceptance-v1`），必填 candidate_id、commit（40 位）、entry、manifest_sha256、offered_message_ref；outcome 是 seen / changes / accepted 時還要 reply_ref，還沒回覆寫 null。少綁一項、雜湊不是 64 位、commit 不是 `--candidate`，印 `~ UNBOUND_PO_REPLY`；綁好的印 `~ PO_ACCEPTANCE <候選 ID>: <commit 前 12 位> <入口>: 已驗收 (<訊息>)`。
+  - 裁決可加 `ORDER_SHA256:`、`REPORT_SHA256:`（`--hash` 的值）。`--verdict ... --match` 時值不是現在的雜湊，印 `~ VERDICT_RECORD`。
+- **PO 驗收綁到成品本身（2.2，F09，shadow：只改 `~` 提示的內容，exit code 不變）**：
+  - `--po-acceptance` 另外核對成品檔：從 `--artifact-root <資料夾>`（預設：驗收紀錄檔所在的資料夾）讀 `entry`，要是這個資料夾裡的檔；紀錄有 `entry_sha256` 就要相同。選填的 `manifest` 欄寫 manifest 檔的路徑，要算得出 `manifest_sha256`。
+  - 檔不見、雜湊不同、入口在資料夾外、同一個 `reply_ref` 用在兩份不同成品（候選 ID、commit、入口、兩個雜湊任一不同），都印 `~ UNBOUND_PO_REPLY`，不再印已驗收。
+  - 沒有 `entry_sha256` 或沒列 `manifest` 路徑的舊紀錄照讀，印 `~ PO_ACCEPTANCE … PO 回覆 accepted，成品待核對（沒核對的項目）`，不算已驗收。要升成已驗收：補 `entry_sha256` 和 `manifest` 兩欄。
+- 證據紀錄有 `log_error`（2.2，F15：`run --log` 寫到一半失敗）：Standard 印提示「its --log was not written in full」，Strict 失敗。重新記一次就好。
+- 已有舊檔案的專案導入時：`--warn` 只警告、exit 0；`--since YYYY-MM-DD` 跳過較早的檔案（工單看 ISSUED_BY、RESUME_STATE 看 UPDATED、報告和裁決看第一個日期）；找不到日期的檔案無從比較，也跳過，印 `UNDATED` 並在最後一行另計，要查它就不加 `--since`。先用 `--warn` 看全貌，新工單再用 `--since` 嚴格檢查。舊檔案不追溯修改。
+
+## safety_gate.py（3.0.0，D1）
+
+```text
+python -I -X utf8 safety_gate.py --lock-tests <測試檔...> [--repo <repo>]   # 印 TESTS_LOCKED 清單，貼進工單
+python -I -X utf8 safety_gate.py --plan-hash <PLAN.md> --order <WO.md>   # 印 PLAN_APPROVED 行，寫進 DIRECTOR_LOG
+python -I -X utf8 safety_gate.py --show [--config director_work.json]    # 印目前的強度和每個開關
+```
+
+合併 dshdw ds.7 和 agydw 的 `safety_gate.py`。只管 Standard / Strict 工單，Direct 不管。規則由 `gate_check --order` 和 `--match` 執行（`--match` 也收 `--repo`、`--config`）：
+
+| 開關 | light | standard（預設） | strict | 作用 |
+|---|---|---|---|---|
+| `tests_first` | 關 | 開 | 開 | 工單要有 `TESTS_LOCKED`（`- <路徑> sha256=<64 位>`，或 `- NONE  # 原因`；空的清單、沒寫原因的 NONE 都 FAIL）；鎖住的測試檔變了就 FAIL。`--match --candidate` 從候選 commit 讀檔（`git cat-file`），所以 commit 進去的改動也抓得到 |
+| `plan_gate` | 關 | 關 | 開 | `--match` 有 DIRECTOR_LOG 時，要有 `PLAN_APPROVED <WO> sha=<64 位>`；`<WORK_DIR>/<WO>/PLAN.md` 只能多打勾，而且每項都要打勾 |
+| `spec_review_for_standard` | 關 | 關 | 開 | `--match` 也要有這張工單的 SPEC_REVIEW（log 行或 reviews/ 檔） |
+| `stop_after_rounds` | 0 | 0 | 1 | STOP_RULES 允許的輪數不能超過這個數（0 = 不查） |
+| `prefer_auto` | 關 | 關 | 開 | 沒有 AUTO 驗收條件時給 `~` 提示（不擋） |
+
+- 設定：`director_work.json` 的 `"strength"`，和選用的 `"safety": {開關: 值}`。沒給 `--config` 時，讀工單資料夾或上一層的 `director_work.json`；都沒有就是預設強度。`setup_check` 也會檢查這兩個欄位。
+- 不准自己放鬆（硬底線）：`strength` 設成 light，或某個開關比強度鬆（開改關、`stop_after_rounds` 改 0 或改大），Standard / Strict 工單 FAIL，除非 `PO_PENDING.md` 有一筆寫明這個開關（例如 `strength`、`tests_first`）、狀態 answered 或 closed、有 ANSWER 的紀錄，這時改成 `~` 提示。調嚴不需要 PO。
+- 值的型別不對（`"strength": "lite"`、`"tests_first": "no"`、`stop_after_rounds` 給負數或 true）、不認得的開關、讀不了的設定檔：FAIL，不會往寬鬆的方向猜。
+- 變體預設強度（3.0.0 B15，dsh 回報）：預設是 standard；變體在 tools/ 旁邊的 `adapters/<名稱>/VARIANT.json` 寫 `{"default_strength": "light"}`（dshdw 照規格預設 light），就不必覆寫 `safety_gate.py`。規則 repo 和裝好的 `DIRECTOR/` 都是 `tools/` 和 `adapters/<名稱>/` 並排，兩邊都讀得到。這個預設和 standard 一樣算預設（設成它不用 PO 回覆）；`--show` 多印一行 `~ default strength <強度> from <檔>`。檔案讀不了、值不是三種強度之一、兩個檔不一致：FAIL，預設維持 standard；沒有這個鍵就是 standard。
+- 限制：把 `"strength": "strict"` 整行刪掉會回到預設強度，這個工具看不出來；要靠 git 歷史或總監審查。
+- 預設強度（standard、沒設開關）不印 `SAFETY` 提示；其他強度印一行 `~ SAFETY strength …`，列出開著的閘門。
+- 大小上限和保護測試（3.0.0 B4，總監決定，取自 agydw／dshdw ds.4 B1、B5；`scope_check.py` 執行，見該節）：有宣告才查，三種強度都一樣。`director_work.json` 最上層的 `order_limits`（`max_files_per_order`、`max_lines_per_order`、`max_test_lines_per_order`，只對 Standard / Strict 工單）和 `protected_tests`（glob 清單）；值不是 0 以上的整數、不認得的鍵、`protected_tests` 不是字串清單，`scope_check` 判 NOT_RUN，不往寬鬆猜。沒有移植：dshdw 舊的 `sdd` 區塊。
+
+## release.py（2.2.2）
+
+```text
+python -I -X utf8 tools/release.py                    # dry run：fetch 和所有檢查都跑，列出會做的遠端動作，遠端不變
+python -I -X utf8 tools/release.py --execute          # push → tag → GitHub Release，每步驗證
+python -I -X utf8 tools/release.py --merge [--execute]   # 和遠端主線分岔時：開 release/<版本> 合併（dry run 只用 merge-tree 預測衝突）
+```
+
+- 從 DW-DS ds.3（`claude/ds3-tools`）移植；DSH／ds 專屬的部分拿掉。3.0.0 起版號整組比較（上游版號＋`-<label>.N` 一起比，計畫 6.9-3）：3.0.0 B14 起工具也照 DW 系列的規定（SPEC §1-8）：序號接續同一個標籤的前一版，只收前一版加 1（例如 cdx.11、agy.7、dsh 的 ds.8），從 1 重來、跳號都停，NEXT 印出該用的版號；這個標籤還沒有 tag 時序號不限，重跑（tag 已在 HEAD）不再查。
+- **從 commit 發版，不從工作樹**：VERSION 和 CHANGELOG.md 用 `git show HEAD:VERSION` 讀。有追蹤中的檔案改了沒 commit（含 staged），dry run 也一樣停在 `STEP FAIL: worktree`，印出是哪些檔（VERSION 改了會印工作樹和 HEAD 各是哪一版）和 `NEXT:` 下一步（commit 或還原）。未追蹤的檔不算。
+- 步驟：fetch（只更新 remote-tracking 和 tag）→ worktree → 比對 `<remote>/<branch>`（UP_TO_DATE／AHEAD 可發；BEHIND 停；DIVERGED 停，或 `--merge`）→ version（HEAD 的 VERSION＝CHANGELOG 第一個 `## `；tag 還不在遠端或已指向 HEAD；排序高於遠端所有 tag）→ readme（3.0.0：HEAD 有 `tools/readme_check.py` 才跑 `readme_check.py --rev HEAD`，沒有 exit 0 加 PASS 行就停；沒有這支工具的 repo 印 SKIP）→ selftest（預設 `python -I -X utf8 tools/selftest.py`）→ 公開掃描 `<remote>/<branch>..HEAD`：路徑（`DIRECTOR/`、`CLAUDE.local.md`、`.claude/settings.local.json`、Claude session 紀錄）、新增行和 commit 訊息（3.0.0 B9：直接用 `privacy_scan.py` 的規則和允許清單，只有一份：磁碟代號路徑、使用者資料夾 `/Users/<名稱>` `\Users\<名稱>` `/home/<名稱>`、email、token 格式、其他專案代號和帳號名、私人詞；另加 `secret_mask.py` 像真值的 `key = value`）、作者／提交者 email；noreply 和 `*.invalid` 地址只在 commit 訊息（Co-Authored-By）和作者／提交者欄位放行，寫在檔案裡照樣停；命中的 email 遮成 `al***(17)` 這種樣子印；PATH 上有 gitleaks 也一起跑 → privacy（3.0.0：和 `privacy_scan.py --rev HEAD` 同一套規則，讀 HEAD 的每個檔和路徑，不只改動；任何 HIT 或讀不懂的允許清單都停）→ delivery（3.0.0 B3，C2 硬底線，取自 cdx_release：`<director>/evidence/DELIVERY.json` 存在時跑 `delivery.py check --delivered <驗過的 commit>`，要 exit 0 加 `DELIVERY_CHECK: PASS`；紀錄之後又 commit 是 `HEAD_MOVED`，停；沒有紀錄印 SKIP）→ push（不 force；3.0.0 B3：push 的是 state 步驟後釘住的那個 commit `<sha>:refs/heads/<branch>`，不是 push 當下的 HEAD；檢查途中 HEAD 動了就停；push 前再 ls-remote 一次，不是檢查時看到的遠端（或就是這個 commit，重跑）就停：遠端在驗證後動了）→ annotated tag（打在驗過的 commit；`--execute` 時打 tag 前、建 Release 前各再確認一次遠端分支還是它）→ `gh release create --verify-tag --latest`，notes 取 CHANGELOG 該段 → describe（3.0.0 B5，取自 dshdw 2.4.0-ds.6）：GitHub repo 說明裡的每個版號（`x.y.z` 或 `x.y.z-<標籤>.<n>`，前面有 `v` 就保留）換成這次的版號，`gh repo edit --description` 後再 `gh repo view` 確認；說明裡沒有版號、已經是這個版號印 SKIP；本機沒有 gh 印 SKIP（總監決定：發版不因此停，說明請手動改）；改了卻沒顯示、`gh repo edit` 失敗就停（分支、tag、Release 都已留著）。`--merge --execute` 時驗的是合併出來的 commit；它不是交付紀錄裡的 commit，有 `DELIVERY.json` 就會停（照 C2：只發交付驗過的 commit），要先把合併結果重新驗過、記錄交付再發。
+- 重跑時已完成的步驟印 `SKIP`（分支已是 HEAD、tag 已指向 HEAD、Release 已存在）。
+- 結尾 `RELEASE: DRY_RUN|DONE|FAIL`；失敗時 `STEP FAIL: ...` 和 `NEXT: ...`。exit 0 乾淨或完成、1 某步失敗、2 不能跑。
+- 設定：`--config director_work.json` 的 `"release"`（`remote`、`branch`、`title`、`tag_message`（`{version}` 會代入）、`selftest`、`gh_repo`、`director`（3.0.0 B3：DIRECTOR 資料夾，相對 repo，預設 `DIRECTOR`；`--director` 優先））；沒寫用預設，不認得的鍵直接拒絕（exit 2）。
+- 只在發版時跑，不是每輪步驟。push、tag、Release 仍要 PO 核准（`docs/08`）。
+
+## privacy_scan.py（3.0.0）
+
+```text
+python -I -X utf8 tools/privacy_scan.py                 # 工作樹：追蹤中＋未追蹤（不含 ignore 的）
+python -I -X utf8 tools/privacy_scan.py --rev HEAD      # 某個 commit 的檔（release.py 用這個）
+python -I -X utf8 tools/privacy_scan.py --words <檔>    # 另加私人詞（真名、真 email），一行一個
+```
+
+- 讀每個檔的每一行和每個路徑名稱（`release.py` 的公開掃描只看這次改動，舊的漏洞看不到）。二進位檔（有 NUL）跳過並計數。
+- 規則：`drive_path`（`<碟>:/`、`<碟>:\`；工作區一律寫 `<WS>`）、`user_folder`（`/Users/<名>`、`\Users\<名>`、`/home/<名>`）、`email`、`token`（`secret_mask.py` 的格式）、`code_name`（擁有者其他專案的代號，在工具裡用跳脫字元存，工具不會掃到自己）、`owner_handle`（擁有者帳號名，公開 repo 網址以外）、`private_word`（`--words` 或 repo 根目錄的 `privacy_banned.local.txt`；這個檔只放本機，用 `bootstrap_repo.py --add privacy_banned.local.txt` 讓 git 忽略）。
+- 每個 HIT 印 `HIT <規則> <路徑>:<行>` 和遮住的片段，原文不整段印出。結尾 `PRIVACY_SCAN: CLEAN|FAIL|INVALID`；exit 0／1／2。
+- 允許清單 `tools/privacy_allow.txt`：一行 `<規則>: <regex> | <理由>`，沒有理由、規則不認得、regex 壞掉都是 INVALID。允許只蓋住它自己對到的那一段，同一行別的私人資料照樣 HIT。清單只放公開 repo 網址、測試網域（example.invalid、example.com）和 DW 系列自己的公開名稱；其他的改檔案，不加例外。
+- 已知限制：真名只能靠本機詞表，CI 上沒有這個檔就查不到；Git Bash 的 `/<碟>/` 路徑形式不算磁碟路徑。
+
+## base_sync_check.py（3.0.0）
+
+```text
+python -I -X utf8 tools/base_sync_check.py --base <基板 BASE_VERSION 的 checkout> [--variant .] [--registry adapters/<平台>/BASE_SYNC.json]
+```
+
+- 規格 6.1、C7：變體 = 基板原樣＋`adapters/<平台>/`。原本寫在 cld 的 `adapters/claude/`，3.0.0 B6 升到基板，每個變體跑同一支。
+- `--variant` 預設目前資料夾；`--registry` 預設變體裡唯一的 `adapters/*/BASE_SYNC.json`，沒有或不只一個就印 cannot run（exit 2）。
+- 3.0.0 B11：基板標成選用的工具（`install.py` 的 OPTIONAL：`hook_guard.py`、`transcript_audit.py`、`context_probe.py`、`browser_check.py`，只有 Claude 用）變體可以不帶，不用寫進 not_ported：印 `OPTIONAL <路徑>`，不是 MISSING，結尾多 `optional=N`。帶了就要跟基板一樣（或登記成覆寫）。`setup_project_settings.py`、`guard_rules.json` 不是選用（`setup_check.py` 每個平台都讀它的設定版號和模式）。
+- 每行一個結果：SAME／OVERRIDE／ADDED／NOT_PORTED／OPTIONAL，問題是 MISSING／CHANGED／EXTRA／STALE／OVERRIDE_STALE（基板改了覆寫過的檔，要重新審）／REGISTRY／VERSION／UPSTREAM／README（覆寫沒寫進 README）。
+- 結尾 `BASE_SYNC: PASS|FAIL base=… variant=… same=… overrides=… added=… problems=…`；exit 0／1／2。
+
+## readme_check.py（3.0.0）
+
+```text
+python -I -X utf8 tools/readme_check.py                       # 工作樹的 README.md
+python -I -X utf8 tools/readme_check.py --rev HEAD            # 某個 commit 的 README.md（release.py 用這個）
+python -I -X utf8 tools/readme_check.py --kind base|variant   # 預設：有 BASE_VERSION 就當變體
+```
+
+- PO 11-28：「大部分 README 都不完整，沒寫基板和其他版本」。規格 §1-9 的各節，範本在 `templates/VARIANT_README.md`。
+- 兩種都要：`# ` 標題、第一個 `## ` 之前有說明；「所屬系列」的表每個 repo（基板和 cld／dsh／cdx／agy）一列，每列有 `https://github.com/` 網址和反引號裡的版號；跨變體借用（表頭 `| 做法 | 原本出自哪版 | 現在用哪版 | 怎麼處理 |` 或「無」）、換手提示詞、版號規則、CHANGELOG、致謝。
+- 變體另要：「所屬系列」寫出 `BASE_VERSION` 的版號和凍結的基板 commit（反引號裡 7～40 位 hex），以及新增／沿用上游／拿掉（NOT_PORTED）／安裝。
+- 標題從頭比對（`## 新增（只有這個變體有）` 算新增）；``` 區塊裡的 `## ` 不算。缺節印 `MISSING`、空節印 `EMPTY`、內容不對印 `BAD`。
+- 結尾 `README_CHECK: PASS|FAIL|INVALID kind=<kind>`；exit 0／1／2（沒有 README、`--rev` 不是 commit）。呼叫的人拿不到 exit code、或沒看到 PASS 行，都算 FAIL（`release.py` 就是這樣判）。
+
+## setup_check.py（2.2.0）
+
+```text
+python -I -X utf8 setup_check.py <WS>/DIRECTOR [更多資料夾或檔案]   # 建置完成：待決頁網址和置頂兩行
+```
+
+- 讀資料夾裡的 `DIRECTOR_STATE.md`（也可直接給檔案）。每個對象印 `OK   setup <檔案>` 或 `FAIL setup <檔案>`，問題一行一個 `  - ...`，提示 `  ~ ...`。
+- 合法的只有三種：`PO_PAGE_URL: https://claude.ai/artifact/<id>`（或 `https://claude.ai/code/artifact/<id>`）加 `PO_PAGE_PINNED: yes`；同樣的網址加 `PO_PAGE_PINNED: no reason=<原因>`（另印提示：請 PO 自己置頂）；`PO_PAGE_URL: NONE reason=<原因>`（沒有頁面，`PO_PAGE_PINNED` 可省略或寫 `no reason=...`，不能寫 yes）。
+- 缺行、同一行寫兩次、不是 claude.ai 的 Artifact 網址、`<...>` 佔位、`NONE` / `no` 沒寫原因、檔案不存在，都 exit 1。全部合法 exit 0。
+- 只驗格式，不驗頁面真的存在或真的置頂：偽造的 Artifact 網址、`NONE reason=x` 都會 exit 0。所以總監回報時要貼出發布工具回傳的結果原文（BOOTSTRAP 第 6 步第 7 點、第 13 步）。
+- `BOOTSTRAP` 第 6、11、13 步要它 exit 0 才送第一份回報。只用在建置流程；舊專案不跑它，`status.py` 只印 shadow 提示 `PO_PAGE_MISSING`（`status_gen.py`）。
+- 2.2.1（shadow）：給資料夾、或檔名是 `DIRECTOR_STATE.md` 時，連旁邊的三個檔案一起查；檔案還沒產生只印 `~ not checked, not there yet: ...`。
+  - `PO_PENDING.md`：每筆 `ID: OD-xx` / `ID: ACT-xx` / `ID: CH-xx`（3.0.0：網頁選擇題用網頁題號，不另編 OD）的 ID、STATUS、QUESTION、OPTIONS、RECOMMENDED、SOURCE、ANSWER 各一次（缺 CREATED 只提示）；STATUS 是 open、answered 或 closed；QUESTION、OPTIONS、RECOMMENDED 有填；SOURCE 有填或寫 NONE；answered / closed 要有真的 ANSWER；同一個 ID 只用一次。
+  - `RESUME_STATE.md`：前四行依序是 PROGRESS、DOING、NEXT_STEP、COMMS 而且有填，UPDATED 有日期（和 `gate_check.py --resume` 同一條規則）；2.2.2 加大小（`RESUME_SIZE` shadow，上限同 gate_check）。
+  - `director_work.json`：JSON 物件；`schema_version` 是 1（或不寫）；window 在 100000–1000000；mode 是 general / beginner；`plugins_off` 是 `名稱@marketplace`；guard_profile / guard_mode 是已知的值；`*_pattern` 是合法正規式；其他已知鍵型別要對（不認得的鍵只提示）；2.2.2 的 `resume` 是物件：max_bytes / max_line_bytes / keep_recent 是大於 0 的整數、protect_headings 是非空字串清單（不認得的子鍵只提示）。
+  - 問題印成 `  ~ shadow: ...`，exit code 只看待決頁兩行；加 `--strict` 改成 `  - ...` 並 exit 1。從範本複製、還沒填的資料夾會看到 shadow 提示（範本的範例條目和佔位）。
+
+## trace_report.py
+
+```text
+python -I -X utf8 trace_report.py --orders <DIRECTOR>/orders --reports <報告資料夾> [--verdicts <DIRECTOR>/reviews] [--config <DIRECTOR>/director_work.json] [--decisions <需求或決定檔.md> ...]
+```
+
+- 只讀，印 Markdown 表：需求 | 工單 | AC | 類型 | 狀態 | 證據 | 裁決。需要存檔就自己導到檔案。
+- 需求取自工單的 `TRACES_TO`；報告靠 `ORDER:` 行裡的工單檔名對應，沒有就用 TASK_ID 開頭的工單編號；裁決靠標題裡的工單編號。同一工單有多份報告時不看檔名，依序比 `ORDER:` 行的 REVISION、`ATTEMPT: n` 行、報告裡第一個日期（可帶 HH:MM），取最新的；全部相同就兩份都不取，表內寫「多份報告分不出先後」。這些工單會在「同一工單有多份報告」一節列出每份報告和選了哪份。HEAD 只列出，沒有 git 排不出先後。裁決只配選中報告的版次（看裁決的 `ORDER:` 行）：同版多份取日期較晚的，分不出先後就都不取；沒標版次的舊裁決只有一份時照列，加註「未標版次」。`CANDIDATE_HEAD:` 不是報告 HEAD 的裁決一律不放進表，剩不下就寫「未配對」。
+- 表後列出：沒有 TRACES_TO 的工單、不符 `trace_id_pattern` 的編號、對不到工單的報告、裁決對不到報告版次（含 `CANDIDATE_HEAD:` 不是報告 HEAD 的）、報告過期或版次不符。沒設 `trace_id_pattern` 就不檢查格式。
+- 過期報告（1.3.3）：選中的報告 `ORDER:` 行的 REVISION 不是工單現在的 REVISION，或 `ORDER_SHA256` 不是工單現在的雜湊，狀態欄不再照抄它的 PASS，改寫「過期：…（報告寫 PASS）」或「版次不符：…」。只是提示，不擋；正式判定仍是 `gate_check --match`。沒寫 `ORDER:` 或 `ORDER_SHA256` 的舊報告不判斷。
+- 一列一條 AC（1.3.3），不再把 TRACES_TO 的每個編號和每條 AC 交叉配對。工單的 AC 表可加選用的 `追溯`（或 `traces`）欄，寫這條 AC 驗證哪些編號：每個編號一列，空的（或 `—`）寫「（未指定）」；表後另列「AC 的追溯不在工單 TRACES_TO 裡」和「TRACES_TO 裡沒有 AC 驗證的編號」。沒有這欄、TRACES_TO 有兩個以上編號時，每條 AC 一列，需求欄寫「DD-1、DD-2（工單層）」。`--decisions` 也查 AC 追溯的編號。
+- `--decisions 檔案`（可重複）：讀專案需求或決定檔裡表格列第一欄的 `XX-數字` 編號。TRACES_TO 寫了、卻不在這些檔裡的，列在「TRACES_TO 找不到的編號」；檔裡有、卻沒有任何工單追溯的，列在「沒有工單的需求」。不給這個旗標，輸出和以前相同。專案用初衷卡時，卡和決策登記表一起查（旗標給兩次）：`--decisions <WS>/DIRECTOR/BRIEF.md --decisions <WS>/DIRECTOR/DECISION_REGISTER.md`；舊專案沒有登記表才只給卡。只有 B 開頭的列算待做項目，「沒有工單的需求」裡的 DD、PO、OD 只是決策紀錄，不代表缺工單。配色這類待預覽的事不要編成 B 號，放在卡的「待預覽」段（`docs/12` 第三節）。
+- 初衷卡只用清單列出 DD 編號（`- DD-1 …`，2.1）：只給 `--decisions BRIEF.md` 時，這些編號也算找得到，但不列進「沒有工單的需求」；圍欄裡的清單是例子，不算。表格裡沒有某個開頭的編號時（例如 PO），會提示再加 `--decisions DECISION_REGISTER.md`。
+- `--brief BRIEF.md`（2.1，只讀、不擋）：多印「初衷卡三欄」一節，每條 B 一列：有人負責／這版有驗證紀錄／你看過這個成品嗎。
+  - 驗證紀錄看選中的報告：AC 狀態，加 `--evidence-dir` 時 PASS 還要找得到證據檔。工單記的指紋和現在的列不同，寫「工單是照舊條件寫的，新條件待重驗」。
+  - 你看過：`--director-log` 讀 `PO_PRODUCT_REVIEW` 行，`--acceptance PO_ACCEPTANCE.json`（可重複）讀驗收紀錄，都要綁到報告的 HEAD。看的是別的成品，寫「看過別的成品」；看的是舊條件，寫「當時是舊條件」。
+  - 另列 `BRIEF_STALE` / `BRIEF_UNCONFIRMED` 提示和綁不到成品的 PO 回覆（`UNBOUND_PO_REPLY`）。`--director-log` 有 BRIEF_LOCKED 時以它為依據，和 gate_check 相同。
+  - `--director-log`、`--evidence-dir` 要配 `--brief`，否則 exit 2；`--acceptance` 可以單獨用。
+- **四種證明分開寫（2.2，F08，shadow：只多四欄、exit code 不變）**：初衷卡一節的表頭變成 `| 需求 | 內容 | 有人負責 | worker 自述 | 證據有效 | 綁鎖定依據 | 總監重跑 | 這版有驗證紀錄 | 你看過這個成品嗎 |`。
+  - worker 自述：報告的 AC 狀態。全部 PASS 寫 `自述全過（AC-1 PASS）`，**永遠不寫「有」**。
+  - 證據有效：加 `--evidence-dir` 時，每條 PASS 的證據檔都要是合格的 `evidence_record` 紀錄、HEAD 是報告的 HEAD（和 `gate_check --match --evidence-dir` 同一套檢查）；沒給寫「未知」。
+  - 綁鎖定依據：讀到的初衷卡是 `--director-log` 最新一行 BRIEF_LOCKED 的那份，而且狀態是 LOCKED。
+  - 總監重跑：`--director-log` 有這張工單每條 AC、這個報告 HEAD 的整行 `EVIDENCE_RERUN`（`evidence_record.py verify --rerun` 通過時印的 `LOG_LINE:`，總監貼進 LOG）。
+  - 這版有驗證紀錄：四欄都齊才寫 `有（AC-1：自述、證據、鎖定依據、總監重跑都齊）`；缺的寫 `部分（缺：…）`。只有 worker 自述的舊專案會從「有」變成「部分」，這是預期的：照上面四步補齊就會回到「有」。工單只有工單層 TRACES_TO（沒逐 AC 指定）時寫 `部分（工單層 TRACES_TO，沒逐 AC 指定；…）`。
+- **你看過哪一份成品（2.2，F09）**：
+  - 報告可加 `CANDIDATE_ID: <id>`，指定 PO_ACCEPTANCE 裡哪一份成品。同一 commit 有兩份以上成品、報告沒寫 CANDIDATE_ID，寫「分不出是哪一份」。
+  - 同一份成品有多筆紀錄時照 `replied_at` 取最新；沒有 `replied_at` 寫「分不出先後」。
+  - 報告 HEAD 認不出時，寫「報告 HEAD 認不出，對不到成品」，不拿別的成品充數。
+  - `PO_PRODUCT_REVIEW` 行沒寫 `manifest=` 的，寫「對該 commit 的歷史回覆：…，成品待核對」。
+  - 驗收紀錄的成品檔照 gate_check 的規則核對（入口和 manifest 從驗收紀錄檔所在的資料夾讀）；同一個 reply_ref 用在兩份不同成品，兩筆都列進綁不到。
+- 不悄悄略過檔案：三個資料夾裡不是該類檔案的 `.md`（工單沒有 `ISSUED_BY =`、報告沒有 `TASK_ID`、裁決沒有 `## A`）列在「沒計入的檔案」，寫數量和檔名。舊格式工單要算進來，補一行 `ISSUED_BY = <誰> <日期>`。
+- 只看檔案寫了什麼，不判斷做得對不對。資料夾或 `--decisions` / `--brief` / `--director-log` / `--acceptance` 檔不存在 exit 1，其他情況 exit 0。
+
+## metrics_report.py
+
+```text
+python -I -X utf8 metrics_report.py --director <DIRECTOR> [--since YYYY-MM-DD] [--config <DIRECTOR>/director_work.json]
+```
+
+- 只讀，印 Markdown 表，對應 `PURPOSE.md` 的五個成效指標。改規則前後各跑一次，數字寫進該版 CHANGELOG 的「對齊初衷」。
+- 返工：裁決的下一步是 `CONTINUE_SAME_WORKER` 或 `SWITCH_TO_OTHER_WORKER` 的次數，另列工單改版（REVISION 大於 1）次數。
+- 中斷後遺失的工作：`DIRECTOR_LOG` 裡 `RESUMED ... redo=` 不是 `NONE` 的行（`docs/06b` 恢復程序第 7 步）。
+- PO 介入：`PO_PENDING.md` 的 OD / ACT 項目數；每項的 `CREATED:` 日期給 `--since` 用，沒寫的照算並標 `UNDATED`。待決事項放在別的檔案或別的格式時，在 `director_work.json` 設 `po_pending_files`、`po_item_pattern`、`po_open_pattern`（見 `../director_work.example.json`），不改程式。導入卡住：`DIRECTOR_LOG` 的 `BOOTSTRAP_STUCK` 行（`BOOTSTRAP`）。規格審查：`SPEC_REVIEW ... tokens= adopted=` 行的合計。
+- 額度不在這裡算，跑 `usage_report.py`。沒有東西可數時印 `UNKNOWN`，不印 0：來源檔不存在、一份裁決都沒有（返工）、一份工單都沒有（改版）、`DIRECTOR_LOG` 沒有 `RESUMED` 行（中斷後遺失）。只數得到檔案裡記下的事。
+- 文末「沒計入的檔案」列出像工單（檔名 `WO-` 開頭或放在 `orders` 資料夾）卻沒有 `ISSUED_BY =` 行的檔案；加 `--since` 時另列被略過的工單和沒有日期、照算的工單。
+
+### metrics_report --run（2.1.0，shadow：只讀、只多印一節）
+
+```text
+python -I -X utf8 metrics_report.py --run <run 資料夾> [--compare <基準 run 資料夾>] [--director <DIRECTOR>]
+```
+
+接手演練（`docs/06b`「接手演練」）每一輪一個 run 資料夾，放在 `DIRECTOR/research/<run>/`：
+
+- `run.json`：`{"v": 1, "run_id": "...", "started_at": "2026-11-08T10:00:00+08:00"}`。沒有這個檔，就用最早的 `run_started` 事件當開始時間。
+- `events/*.json`：每個檔是一筆事件或一串事件。每筆都要有 `v: 1`、`event_id`、`type`、`at`（ISO 8601，**要帶時區**，`Z` 也可以）；可以另記 `recorded_at`、`source`。各 type 另外要的欄位：
+
+| type | 另外要的欄位 | 算進哪裡 |
+|---|---|---|
+| `run_started` | 無 | 開始時間（沒有 `run.json` 時） |
+| `asked` | `decision_id`、`topic_id`、`scope_id`、`ask_id` | 決策「提出」；重問 |
+| `answer_received` | `decision_id`、`ask_id` | 決策「已回覆」 |
+| `applied`、`closed` | `decision_id` | 只記錄，不另算 |
+| `withdrawn` | `decision_id` | 決策「撤回」（已回覆的不算撤回） |
+| `po_action` | 無；可加 `kind`（click、type、paste…）和 `count`（正整數，預設 1） | PO 操作次數 |
+| `preview_ready` | 無 | 第一個可用預覽 = 最早的 `preview_ready` − 開始時間（分鐘） |
+
+- 同一個 `event_id` 只算一次（照檔名順序取第一筆）；內容不同的會註明。缺欄位、不認得的 type、時間沒帶時區的事件不算，列出檔名和第幾筆。
+- 決策依 `decision_id` 去重：提出、已回覆、還在等（提出 − 已回覆 − 撤回）、撤回。重問：同一個 `topic_id` + `scope_id` 有幾個不同的 `ask_id`，減 1 再加總；同一個 `ask_id` 重送不算重問。
+- `--compare`：省下 = 基準 − 本次（正數表示本次比較少），PO 操作另印百分比，基準是 0 時百分比寫 UNKNOWN。沒有開始時間或沒有 `preview_ready` 時預覽時間寫 UNKNOWN，不寫 0。
+- **採樣完整度（2.2，F16）**：`run.json` 可加 `"sampling": {"version": 1, "complete": true, "scenario": "S-1", "counted": ["po_action", "asked"], "kinds": ["click", "type"]}`。
+  - `complete: true` 表示這一輪每一筆事件都記了；`counted` 寫有記的 type（省略＝全部）；`kinds` 寫認得的 po_action kind（省略＝任何短名稱）。
+  - 每個數字後面標完整度：確認／部分／未知。沒有標記的舊 run 照讀，標「未知」；沒有事件時印 UNKNOWN，不印 0。
+  - `--compare` 只在兩邊都「確認」、`scenario` 相同時才相減，否則寫 `UNKNOWN：採樣不完整（…）` 或 `UNKNOWN：劇本不同`。舊 run 要再比較：補上 sampling 標記。
+  - `kind` 不是短名稱（例如 `[]`、數字）或不在 `kinds` 裡的 po_action 隔離：列在「隔離」一行，不算、不中斷，exit 0。
+  - `answer_received` 要有同一個 `decision_id` + `ask_id`、時間更早的 `asked` 才算已回覆，否則列在「回覆對不到發問」。
+- 不加 `--run` 時輸出和以前完全相同；`--director` 和 `--run` 至少給一個。run 資料夾不存在：exit 1。
+
+## scope_check.py
+
+```text
+python -I -X utf8 scope_check.py --order <WO.md> --repo <worktree>
+python -I -X utf8 scope_check.py --order <WO.md> --base <ref>        # 取代工單的 BASE_REF
+```
+
+- 改動＝三段 diff 的聯集：merge base..HEAD（已提交）、HEAD..index（已暫存）、index..工作樹（未暫存），再加上沒被 git 忽略的新檔案。改名的兩邊都算。在 worktree 裡也能用。
+- submodule 一律比對，不管 `submodule.*.ignore` 或 `diff.ignoreSubmodules` 怎麼設。
+- 標成 assume-unchanged 或 skip-worktree 的檔，git diff 看不到它的修改，所以另外算雜湊和 index 比；不同就算未暫存，並多印一行 `FLAGGED: n file(s) marked ...; m differ from the index`。skip-worktree 而工作樹沒有這個檔，視為 sparse checkout、不算改動。
+- 看不到被 git 忽略的檔案和 repo 外的檔案。
+- 清單項目裡 ` #` 之後是註解。檔名本身有 ` #` 時，整個項目用反引號包起來：`` - `src/x #draft.txt` ``，反引號裡的字照原樣讀（檔名不能含反引號）。`gate_check.py --order` 看到沒包反引號、` #` 後面緊接著字（像 `a #1.txt`）而被切掉的項目會印提示；`# 說明`（`#` 後面有空格）當一般註解，不提示。
+- 工單有 `REQUIRED_CHANGES:` 清單時，每一條 glob 都要對到至少一個改動的檔案；沒對到的印 `MISSING   <glob>`，結果是 VIOLATION，最後一行多一個 ` missing=n`。沒有這個清單，輸出和以前一樣。`gate_check.py --order` 另外查每一條都在 SCOPE 裡、不在 FORBIDDEN 裡，否則這張工單做不到。
+- REQUIRED_CHANGES 看最後結果（2.2，F14）：比的是 merge base 和最後狀態（工作樹現在的檔案加未追蹤檔）的差，不是三段 diff 的聯集。暫存後又改回、或兩次 commit 改了又改回的檔，現在是 `MISSING`。加 `--candidate <commit>` 時改比 merge base 和那個 commit 的 tree，總監審查用這個。多印一行 `REQUIRED_BASIS: worktree-final|candidate=<12 位> final=<n>`。沒給 `--candidate` 時，越界檢查（SCOPE / FORBIDDEN）照舊看聯集。
+- 候選差異（3.0.0 B1，取自 agy.3）：給了 `--candidate`（不是共用 checkout）時，SCOPE／FORBIDDEN／OUTSIDE／REQUIRED_CHANGES 全部只看 `merge-base(BASE_REF, 候選)..候選` 的差異，不讀 checkout 的四種狀態（`STATES: candidate=<n>`）。審查的人在乾淨的 checkout、別的分支、甚至 orphan HEAD 上跑，結論都和 worker 一樣；留在 checkout 沒 commit 的檔不算候選的一部分。
+- 大小上限（3.0.0 B4，總監決定，取自 agydw／dshdw ds.4 B1）：**有宣告才查，三種強度都一樣**。工單寫 `ORDER_LIMITS = files=<n> lines=<n> test_lines=<n>`（任何 GOVERNANCE，每個字可省），或 Standard / Strict 工單的 `director_work.json` 有 `order_limits`（`--config` 指定，預設找工單資料夾和上一層）；同一項工單的字優先，沒人設的、設 0 的不查。算的是最後結果：有 `--candidate` 看候選的差異，沒有就看工作樹加未追蹤檔對 merge base 的差異；共用 checkout 只算這張工單的 commit 和範圍內沒 commit 的檔。行數＝`git diff --numstat` 的增加加刪除（二進位檔算 0），測試檔（`test_*.py`、`*_test.py`、`tests/` 底下）另算 `test_lines`。印 `SIZE: files=n lines=n test_lines=n limit=f/l/t`（`-`＝不查）；超過印 `OVERSIZE ...`，VIOLATION，最後一行多 ` oversize=1`：把工單拆小。agydw／dshdw 沒宣告時用 3 / 200 / 400；基板沒宣告就不查，它們的 `director_work.example.json` 有寫這個區塊，照範例建的專案照樣會查。
+- 保護測試（3.0.0 B4，取自 dshdw ds.4 B5）：工單 `TESTS_LOCKED` 的檔和 `director_work.json` 的 `protected_tests` glob，只能新增或在檔尾加內容（加新測試）；改掉或刪掉 merge base 時已有的內容、刪掉整個檔，印 `PROTECTED <檔> (...)`，VIOLATION，最後一行多 ` protected=n`（已經是 FORBIDDEN 的檔不重複算）。換行符號和檔尾空行不算改動。有保護的檔時印 `PROTECTED_CHANGED: a.py, b.py`（或 NONE），照抄進報告；`gate_check.py --match` 拿它和 git 比：寫「無」但 git 看到保護的檔變了、漏列變了的檔、保護的檔舊內容被改，都 FAIL；報告沒有這一行印提示。工單和設定都沒有保護的檔就不查。`director_work.json` 讀不了也是 NOT_RUN。
+- 最後一行貼進 TASK REPORT。exit 0 通過、1 越界或缺必要改動、2 沒辦法檢查（`NOT_RUN`，包括 SCOPE / FORBIDDEN 下一行不是 `- 項目`）。
+- 2.2.5（WO-DW-225 B10，`--shared` 從 DW-DS ds.4 B2 搬回；大小上限和保護測試在 3.0.0 B4 搬回，見上）：
+  - `--shared`（工單 `WORKTREE` 寫「共用」或 shared 時自動開）：共用 checkout 裡別的工作線也在 commit，不再把 BASE_REF 以來所有 commit 加總。只算這張工單自己的 commit（標題以工單編號開頭），一次一個 commit 比 SCOPE / FORBIDDEN；沒 commit 的改動照舊比。別人改的檔印 `OTHER  <檔>`，不算越界。最後一行多 ` shared=1 others=n`，STATES 改成 `own_commits` / `own_uncommitted`。
+  - 印一行 `WORKTREE: 隔離 worktree <路徑>` 或 `WORKTREE: 共用 checkout（主 checkout） <路徑>`，由 `git worktree list --porcelain` 判斷（第一筆是主 checkout），報告照抄這一行，不由模型手寫。
+  - 工單的 `BASE_REF = origin/main @ abc123（v2.2.4）`：全形或半形括號裡的字當註解。
+  - 最上層攔下所有例外，印 `NOT_RUN` 一行，不印 Traceback。
+
+## evidence_record.py
+
+```text
+python -I -X utf8 evidence_record.py run --out-dir <資料夾> --label AC-1 --order <WO.md> --artifact <檔案或資料夾> -- <指令> <參數>
+python -I -X utf8 evidence_record.py verify <紀錄.json>
+python -I -X utf8 evidence_record.py verify <紀錄.json> --rerun --order <WO.md> --dispatch-log <DIRECTOR_LOG.md> --repo <候選 commit 的乾淨 checkout> --candidate <40 位>
+python -I -X utf8 evidence_record.py verify <紀錄.json> --rerun-recorded   # 跑紀錄裡寫的指令，不算重跑驗證
+```
+
+- 紀錄放 repo 外的工作資料夾。只留最後 40 行（`--tail`）、每行最多 400 字；要完整輸出就加 `--log <檔案>`。
+- `--log` 的上層資料夾不存在時自動建立（2.2，v2.1.0 已知問題）。建不出來或開不了（例如上層是一個檔案、沒有寫入權限）：印 `EVIDENCE: NOT_RUN cannot open --log …`、exit 2，指令不跑、不寫紀錄（F15；以前會照跑並寫 exit 0 的紀錄）。跑到一半寫不進 log：指令照跑完，紀錄多一個 `log_error` 欄，結論行加 ` log=incomplete(…)`，指令 exit 0 時改 exit 4。
+- 沒有 git（2.1.0，例如從 ZIP 解開的規則包）：`run` 照樣跑指令、寫紀錄，`git` 欄是 `{"head": null, "dirty": null}`，stderr 印一行 `git metadata not available (git not found ...)`。這種紀錄在 `gate_check --match --evidence-dir` 算「沒有 git HEAD 的紀錄」（Strict 失敗、Standard 提示）。`verify` 不加 `--rerun` 照常可用；`--rerun` 要 git，沒有就 `NOT_RUN git not found ...`、exit 2，絕不算通過。
+- 螢幕只印一行結論，指令本身的 exit code 原樣傳回。
+- 讀到不是 UTF-8 的檔（2.2，v2.1.0 已知問題）：gate_check、scope_check、trace_report、metrics_report、evidence_record 都只印一行 `<工具>: NOT_RUN a file is not UTF-8 text (<檔名>) …`、exit 2，不再印 traceback。把檔案另存成 UTF-8 再跑。
+- 指令和輸出結尾會照原樣存檔，不要把密鑰放進指令。
+- `verify` 先查紀錄有沒有 `run` 寫的每個欄位（缺欄位或型別不對：`NOT_RUN not an evidence record`，exit 2；沒有 `schema` 的舊紀錄照讀，印提示），再比對產物雜湊。結論行把三件事分開印：`integrity=same|changed`（產物和紀錄時相同）、`test=not-rerun|passed|failed(...)`（只有 `--rerun` 跑核准的檢查而且 exit 0 才是 `passed`；不重跑就是 `not-rerun`，不算重跑過）、`artifacts=N missing=M`（紀錄時就缺的、現在不見的都算 missing）。有任何一項不對就是 `MISMATCH`，exit 1；產物缺了絕不會 OK。會變動的產物（含時間戳）重跑後一定不同，這種就只比 exit code 和人工看的部分。
+- `--rerun` 跑的是總監核准的檢查，不是紀錄裡寫的指令，四個參數都要給，少一個就 `NOT_RUN`、exit 2，什麼都不跑：
+  1. 工單的雜湊和 REVISION 要等於 LOG 裡這張工單最新的 DISPATCH 行，不同就 exit 2。
+  2. 用紀錄的 label 找 AC，取工單 `CHECKS:` 裡那條 AC 的指令；沒有就 exit 2。
+  3. `--repo` 的 HEAD 要是 `--candidate`（40 位）；不能有修改或未追蹤檔、不能有標成 assume-unchanged 或 skip-worktree 的檔（git status 看不到它們的修改）、不能有 `refs/replace/`（它能讓別的 tree 冒用候選 commit 的名字），否則 exit 2。git 一律關掉 replace 物件來讀。
+  4. 指令的程式要是絕對路徑、候選 commit 裡的檔（`./tools/check`）或 `python` / `python3`（就是跑這支工具的 Python）；只寫程式名、要靠 PATH 找的一律 exit 2，避免 PATH 換掉程式。2.2.3（L-055）git 是例外，只限唯讀：第一個參數就是子指令，而且是 `diff`、`show`、`log`、`status`、`rev-parse`、`ls-files`、`cat-file` 之一；子指令前有選項（`-c`、`-C`、`--git-dir`…）、其他子指令（push、commit、reset、checkout…）、會寫檔或執行程式的選項（`--output`、`--ext-diff`、`--textconv`、`--filters`、`--no-index`，縮寫也算）都 `NOT_RUN`、exit 2。git 檢查要用歷史，所以在 `--repo` 的頂層跑（不是暫存資料夾），關掉 replace 物件、fsmonitor、pager、optional locks、外部 diff 和 textconv；第 6 步照樣重讀 repo。只要確認鎖定檔沒改，也可以改用 sha256 比對（`docs/02`「AC 用 git」）。
+  5. 從 git 物件把候選 commit 的 tree 寫進新的暫存資料夾，每個檔案都核對雜湊，在那裡跑核准的指令，不在 `--repo` 的工作樹裡跑。紀錄的 git HEAD 不是候選 commit、或紀錄的 command 和核准的不同，都是 `MISMATCH`、exit 1；紀錄的 command 只拿來比對，不會執行。產物在暫存資料夾裡、照它相對紀錄 cwd 的路徑重新算雜湊，不同就是 `MISMATCH`。
+  6. 跑完再讀一次 `--repo`：HEAD、tree、狀態或旗標有變，就是 `MISMATCH`、exit 1。
+  7. 紀錄的 `order` 欄（`run --order` 寫的工單 ID、REVISION、雜湊）照 `gate_check.py --match --evidence-dir` 的規則比對，LOG 裡的整行 `EVIDENCE_EQUIVALENT` 也照算：Strict 工單不符是 `MISMATCH`、exit 1，Standard 印 `~` 提示；沒綁的紀錄 REVISION 1 印 WARN。
+  結論行最後加 `check=AC-1 source=order candidate=<12 位>`。
+  8. （2.2，F10）候選 commit 的 tree 有 symlink（mode 120000）或 submodule（160000）時，重建出來的就不是候選 commit，所以 `NOT_RUN unsupported tree mode …`、exit 2，什麼都不跑。這種 AC 改用別的方式驗，或把連結拿出候選 commit。
+  9. （2.2，F08）通過時多印一行 `LOG_LINE: EVIDENCE_RERUN <WO-ID> <AC> candidate=<40 位> result=ok record=<檔名>`，總監整行貼進 DIRECTOR_LOG，`trace_report --brief` 的「總監重跑」欄讀它。
+  10. （2.2，v2.1.0 已知問題）加 `--brief <BRIEF.md>`（初衷卡）和 / 或 `--order-history <資料夾>`：用 `gate_check --match` 的同一組函式比初衷卡。工單釘的指紋和鎖定的初衷卡比（`brief_notes`）；紀錄是用 EVIDENCE_EQUIVALENT 從舊工單沿用的，再拿舊工單釘的指紋比（`carried_notes`）。結果印 `~ BRIEF_STALE` / `~ BRIEF_UNCONFIRMED`，`LOG_LINE` 結尾多 ` brief=ok|stale|unconfirmed`（`ok` 要有 `--brief`，而且初衷卡是 `--dispatch-log` 裡最新的 BRIEF_LOCKED；只給 `--order-history` 沒給 `--brief` 時沒東西可比，印 `brief=unconfirmed`）。只是提示，exit code 不變；不加這兩個參數時 `LOG_LINE` 和以前一樣。`brief=stale` 或 `brief=unconfirmed` 的行，`trace_report` 的「總監重跑」欄不算，顯示「沒有：重跑時鎖定依據不符」。
+- 暫存資料夾只有已 commit 的檔，沒有 `.git`、未追蹤檔和被忽略的檔，跑完就刪。這證明「跑的是總監核准的檢查、在候選 commit 的 tree 上」，但檢查仍會執行候選 commit 裡 worker 寫的測試碼，不是沙箱。`--repo` 仍要乾淨，建議用 `git worktree add --detach <目錄> <候選 commit>` 新開（只新增 worktree，不刪別的）。
+- `--rerun-recorded` 是 v0.12 的 `--rerun`：在紀錄的 cwd 跑紀錄寫的指令。能改紀錄的人就能決定跑什麼，所以結論是 `test=recorded-command-passed source=record`，永遠不印 `test=passed`。v0.12 只寫 `--rerun` 的指令現在會 exit 2，改成上面的完整寫法。
+
+## container/（1.1.0 起；1.2.0 加每個 worker 自己的 clone 和 DNS 白名單）：在容器裡跑 worker
+
+在 WSL 裡用 docker 開一個 worker，給它 OS 層的隔離和網路出口管制。原生 Windows 上這兩項 doctor 都報 NOT_ENFORCED，這是 DW 目前唯一能讓 `isolation` 變成 ENFORCED 的路。
+
+```text
+# 在 WSL 裡（docker 在那裡），一次：
+docker build -t dw-worker:1.2.0 tools/container
+# 每個 worker（1.2.0，K1）：先給它自己的 clone，做完再收回那一條分支
+bash tools/container/worker_clone.sh create  --repo /mnt/d/.../repo --base <commit> --branch <分支> --dir ~/dw-clones/<名稱>
+bash tools/container/run_worker.sh --clone ~/dw-clones/<名稱> --name <名稱> --director /mnt/d/.../DIRECTOR \
+     [--offline | --login | --allow <host> | --allow-file <檔案>] [--dry-run] -- claude
+bash tools/container/worker_clone.sh collect --repo /mnt/d/.../repo --branch <分支> --dir ~/dw-clones/<名稱> --name <名稱>
+# 舊的寫法（1.1.0）：2.2.0 仍支援的舊模式，印 WARN K1，doctor 報 NOT_ENFORCED；只會在 major 版（最早 3.0）移除，小版本不會拿掉。要遷移就改用上面的 worker_clone.sh create + --clone：
+bash tools/container/run_worker.sh --worktree /mnt/d/.../wt --director /mnt/d/.../DIRECTOR \
+     --git-common /mnt/d/.../repo/.git [--worktree-name <名稱>] [...] -- claude
+```
+
+### worker_clone.sh（1.2.0，K1）
+
+- `create`：把 REPO 在 `--base` 的內容完整複製到 `--dir`（`--no-local`：不共用 hardlink，也沒有 alternates）。clone 裡只有 `--branch` 一條分支，沒有 remote、沒有 tag，`.git/config` 由腳本重寫，`.git/hooks` 是空的。clone 裡沒有任何東西指回原 repo。
+  - `--dir` 必填，沒有預設，而且不能已經存在（Q4）。建議放 WSL 的 ext4（例如 `~/dw-clones/<名稱>`），不要放 `/mnt/<磁碟>`（數字見下面 K2）。
+  - 不要在主機上對 clone 跑 git：worker 可能在裡面留了 config、hook 或 attributes，會在主機上執行。
+- `collect`：在一個離線、沒有 capability、clone 唯讀掛載的拋棄式容器裡，把 clone 的 `refs/heads/<分支>` 打包成 bundle（worker 留下的 git 檔案只在那個容器裡被讀到），再交給 `import`。
+- `import`：bundle 從這裡起只當資料處理。它必須剛好只有一個 ref `refs/heads/<分支>`，且在 REPO 裡過 `git bundle verify`。objects 先進一個隔離 repo，過 `index-pack --strict` 和 `fsck --strict`，tip 必須是 commit；都過了才把 objects 複製進 REPO，並設 `refs/dw-workers/<名稱>/<分支>`。
+  - 原 repo 的其他 ref（分支、tag、`HEAD`）一律不動：worker 碰不到，`collect` 也不改。
+  - worker 不能 push（Q3）：容器裡沒有 remote、沒有 token，原 repo 沒掛進去；由總監 `collect`。
+  - 成功印 `COLLECTED <ref> <sha>`，exit 0；其他情況印原因，exit 2。selftest 用 12 種 bundle 測過都拒收，拒收後原 repo 的 ref 和 objects 都沒變：兩個 ref、別的分支、名稱只是開頭相同的分支、tag、只有 HEAD、tip 是 tag 物件、fsck 不過的 commit、需要原 repo 沒有的 commit、pack 位元組損毀、截斷、不是 bundle、檔案不存在；不合法的 `--name` 也拒收。
+- 代價：每個 worker 多一份完整 objects（DW repo 很小）；容器裡看不到原 repo 的其他分支，要用就在 `create` 時用 `--base` 指定。
+
+- `Dockerfile`：基底 `python:3.12-slim-bookworm` 用 digest 釘住，Claude Code 用 `ARG CLAUDE_VERSION` 釘版本，`DISABLE_AUTOUPDATER=1`。要升級就改這兩行重 build，不會自己更新。
+- `run_worker.sh` 給容器的東西只有：
+  - `/work`：worker 的 worktree，唯一能寫的專案資料夾。
+  - `/director`：DIRECTOR，唯讀。**2.2.0（F11）起 DIRECTOR 不可以和任何可寫掛載重疊**：`--clone`、`--worktree`、`--git-common` 的真實路徑（`pwd -P`）與 DIRECTOR 相同、在它底下、或包住它，都 exit 2、不印 docker 指令；另用 inode（`-ef`）和 `/mnt/<磁碟>` 不分大小寫比對，擋住 symlink、`..`、Windows／WSL 大小寫別名。原因：DIRECTOR 放在 clone 裡時，worker 改 `/work/DIRECTOR/...` 就等於改了唯讀的 `/director`（審查實測寫入成功）。
+    - 遷移：先備份 DIRECTOR，再把它搬到 clone／repo 以外的獨立資料夾（例如 `/mnt/d/DIRECTOR-WORK-DIRECTOR`），同步改 `--director` 與專案設定裡寫死的路徑；舊專案若 DIRECTOR 在 repo 內，這是 2.1.0 → 2.2.0 唯一會從「能啟動」變成「exit 2」的行為。
+    - 啟動前的重疊檢查是掛載設定檢查，不寫任何檔；doctor 的診斷若要寫入測試，只准用一次性 canary 檔，不碰正式工單。
+  - repo 的 `.git`，可寫（見 K1），其中三處另外唯讀蓋上：
+    - `hooks/` 和 `config`：之後在主機上執行。少了這兩個就 exit 2，免得 docker 用 root 身分在主機上建出來。
+    - `worktrees/`：別的 worktree 的紀錄。它們的 `gitdir` 檔寫的是 Windows 路徑，容器裡看起來不存在，所以容器裡的 `git worktree prune` 會把它們刪掉。
+  - 兩種 worktree：
+    - 主 checkout（不給 `--worktree-name`）：`--git-common` 必須是 `<worktree>/.git`，`.git` 就在 `/work/.git`。
+    - linked worktree（`--worktree-name <名稱>`）：`.git` 掛在 `/repo-git`。主機上 worktree 的 `.git` 檔寫的是 Windows 路徑，Linux 的 git 讀不懂，所以另外唯讀掛一個 `/work/.git` 檔指到 `/repo-git/worktrees/<名稱>`。自己那筆紀錄可寫（index、HEAD、logs），其中 `gitdir` 檔唯讀換成 `/work/.git`，prune 就不會刪它。
+  - docker volume `dw-claude-home` → `/home/dw/.claude`：只放容器裡 Claude Code 自己的登入。**這是同一台主機上所有 worker 共用、可寫的同一個 volume（F18）**：clone 隔離不等於登入與使用者設定隔離，一個 worker 能讀到、改到另一個 worker 的登入狀態與設定，也和跨專案、跨帳號共用。需要隔離時，每個信任範圍用自己的 volume：啟動前設環境變數 `DW_CLAUDE_HOME_VOLUME=dw-claude-home-<範圍>`（預設仍是 `dw-claude-home`，不設就和 2.1.0 一樣；名稱只准字母、數字、`_ . -`），各 volume 第一次都要在容器裡 `/login`。舊 volume 保留到確認遷移完成再刪（刪除屬於 PO 或總監的決定）。
+  - `--clone`（1.2.0）：`/work` 就是 worker 自己的 clone，`.git/config` 和 `.git/hooks` 另外唯讀蓋上；原 repo 完全不掛。上面 `.git` 的三種掛法只用在舊的 `--git-common`。
+  - 環境變數只有這些：`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`、`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`、`XDG_CACHE_HOME`、`DW_ALLOW_DOMAINS`、`DW_DNS_UPSTREAM`、`DW_WORKER_NAME`（audit log 檔名用）、`DW_GIT_MODE`（`clone` 或 `shared`，doctor 用），有網路時 `--sysctl`（關 IPv6，不是環境變數），`--git-common` 時再加 `GIT_CONFIG_COUNT/KEY/VALUE` 設的 `gc.auto=0` 和 `gc.worktreePruneExpire=never`（git 不會自己 gc 或 prune）。不帶 `--env-file`，主機的變數一個都不進去。`--offline` 沒有 `DW_ALLOW_DOMAINS` 和 `DW_DNS_UPSTREAM`。
+  - 沒有 `GIT_DIR` 和 `GIT_WORK_TREE`：設成全域變數，容器裡每個 git 都會指到這個 repo，連在別的資料夾跑的也是（selftest 在暫存區 `git init` 就壞了）。
+  - 不掛主機的家目錄、`~/.ssh`、gh 設定、AppData，也沒有 docker socket。
+- 權限：`--cap-drop ALL`，只加回 NET_ADMIN、NET_RAW、SETUID、SETGID、SETPCAP，給 entrypoint 以 root 設防火牆用。設完 `setpriv` 換成使用者 `dw`，並清空所有 capability（包括 bounding set，所以要 SETPCAP）和 `no_new_privs`。另有 `--read-only`（根目錄唯讀，`/tmp`、`/run` 是 tmpfs）、`--pids-limit 512 --memory 4g --cpus 4`。
+- 網路（`init_firewall.sh`，分兩段，中間由 entrypoint 啟動 `dns_allow.py`）：OUTPUT 預設 DROP。只放行 loopback、已建立連線的回應、使用者 `dwdns`（只有 `dns_allow.py` 用）對 `DW_DNS_UPSTREAM` 的 53，以及白名單名稱在**開容器當下**解析到的 IPv4 的 TCP 443。其他一律 REJECT；IPv6 一律 DROP。
+  - **這條規則的準確說法（F18）：放行的是「解析後的目的 IP:443」，不是網域名稱。** 防火牆不看 TLS SNI，也不看 HTTP Host；同一個 IP 上若還有別的網站（CDN、共用主機），443 也連得到。要做到網域層控制，得改用受控代理並禁止直接連線，目前沒有做。
+  - IPv6（F18）：`init_firewall.sh` 設 `ip6tables` DROP 時失敗會被忽略，所以 2.2.0 的 `run_worker.sh` 在有網路時另外給 docker `--sysctl net.ipv6.conf.all.disable_ipv6=1` 和 `net.ipv6.conf.default.disable_ipv6=1`（映像不變，仍是 `dw-worker:1.2.0`）。docker 不接受這個 sysctl 時容器起不來（失敗即關閉）。實際有效與否用 `doctor.py --probe` 在容器裡驗證；本版沒有在真實 Docker 上跑（見 TASK_REPORT 的 UNVERIFIED）。
+  - 名稱清單：`--allow-file`（預設是同資料夾的 `dns_allow.txt`，裡面只有 `api.anthropic.com`），加上 `--login` 和 `--allow`，依序合併、去重、轉小寫；有不合法的名稱就 exit 2，清單是空的也 exit 2（要沒網路就用 `--offline`）。
+  - `--login` 加 `claude.ai`、`platform.claude.com`、`console.anthropic.com`，只有第一次登入要用。
+  - `--allow <host>` 再加別的名稱。`*.example.com` 代表它底下的子網域（不含本身）：只解析，不開 443。
+  - `--offline` 是 `--network none`，完全沒有網路，也不啟動 resolver。
+- DNS（1.2.0，`dns_allow.py`，只用標準庫）：容器的 `/etc/resolv.conf` 指向 `127.0.0.1`（`--dns 127.0.0.1`），53 埠轉到 `dns_allow.py` 的 5353。
+  - 它以使用者 `dwdns` 跑，沒有任何 capability、`no_new_privs`；`dw` 結束不了它，也搶不到 5353。
+  - 只回答白名單名稱的 A / AAAA（class IN、一個問題、opcode 0）。不在清單的名稱回 NXDOMAIN；其他型別（TXT、MX、ANY…）回 REFUSED；格式錯回 FORMERR；上游都沒回應回 SERVFAIL。
+  - 轉給上游時用新的隨機 ID、名稱轉小寫、不帶 worker 送來的其他欄位；回來的答案要對得上 ID 和問題才轉回去。
+  - 被擋的名稱寫一行 `dns_allow: refused <名稱> type <n>` 到容器的 stderr（同一名稱只寫一次，最多 100 個）。
+  - 上游：`DW_DNS_UPSTREAM`（以空白分隔的 IPv4），沒設就用主機 `/etc/resolv.conf` 裡不是 `127.x` 的 IPv4 nameserver（WSL 的 `127.0.0.53` 容器連不到）。都沒有就 exit 2，請設 `DW_DNS_UPSTREAM`。
+  - 沒有關閉開關（Q2）。直接 `docker run` 不帶 `DW_DNS_UPSTREAM`，容器拒絕啟動。直接問 `8.8.8.8`、`1.1.1.1` 這類 DNS 伺服器會被拒（UDP EPERM、TCP 連線被拒）。
+- `--dry-run` 只印出 docker 指令，什麼都不跑。selftest 用它檢查掛載、權限和環境變數。
+
+實測（2026-11-07，WSL2 docker，repo 在 `/mnt/d`，throwaway clone）：
+
+| 項目 | 結果 |
+|---|---|
+| C1 pull 基底（digest） | 7.4 秒 |
+| C2 build（含 apt 和 Claude Code 2.1.317 安裝） | 73 秒；之後只改腳本重 build 3 秒；image 797 MB |
+| C3 開容器到結束（`-- true`） | 有防火牆約 0.95 秒，`--offline` 約 0.59 秒 |
+| C4 容器裡 `git status` | 約 0.6 秒（主機同一份 clone 約 0.09 秒） |
+| C4 容器裡 selftest（`--offline`） | 1304/1304 通過，約 390–430 秒；只在 Windows 跑的案例不算（junction、8.3 短檔名、反斜線等）。主機同一份 clone 1326/1326，約 283 秒 |
+| C5 防火牆和繞路探測 | 35 案全部符合預期（見下） |
+| C8 容器裡 `setup_project_settings.py --runtime-guard --protect-director /director --apply`，再 `doctor.py --probe --director /director` | linked worktree：enforced=5、not_verified=2（audit_log 還沒有紀錄、permissions），not_enforced=0，exit 0。主 checkout 多一項 worktree NOT_ENFORCED（不是 worker 自己的 worktree）。這是 1.1.0 的結果；1.2.0 起 linked worktree 在容器裡是 K1 shared .git，isolation 會報 NOT_ENFORCED |
+
+1.2.0 實測（2026-11-07，同一台機器，`dw-worker:1.2.0`，來源都是 throwaway clone）：
+
+| 項目 | 結果 |
+|---|---|
+| 重 build（只改腳本，快取） | 約 3 秒，沒有下載 |
+| K1 容器實測 | 9/9：worker 在容器裡 commit；clone 的 hooks/ 和 config 沒被改；`collect` 印 COLLECTED 和 worker 的 commit；原 repo 只多了 `refs/dw-workers/w1/k1`，worker 打的 tag 和移動的 main 都沒進來；原 repo 過 `fsck --strict` |
+| DNS 容器實測 | 20/20：`api.anthropic.com` 解析得到（UDP、TCP），`example.com` 和 `<亂數>.api.anthropic.com` 解析不到；TXT 被拒；直接問 `8.8.8.8`、`1.1.1.1` 被拒；HTTPS 只連得到白名單；resolver 以 `dwdns` 跑，`dw` 結束不了它、改不了 iptables、搶不到 5353；`--offline` 照常；不帶 `DW_DNS_UPSTREAM` 拒絕啟動 |
+| doctor 容器實測 | 8/8：`--clone` 的 isolation 六項全過（ENFORCED），worktree 報 the worker's own clone；`--git-common` 印 WARN K1，isolation 報 own .git (K1) FAIL（NOT_ENFORCED） |
+| K2：`worker_clone.sh create` 和日常 git，ext4（`~`）對 `/mnt/d`（drvfs），DW repo 55 個檔，兩輪 | create 0.63–0.82 秒 對 3.10–3.49 秒；`git status` 10 次 0.07 秒 對 1.96–2.05 秒；寫 1000 個檔 0.04–0.05 秒 對 4.20–4.68 秒；`add` 加 `commit` 0.23 秒 對 11.2–13.8 秒；之後 `git status` 10 次 0.12–0.15 秒 對 5.1–6.1 秒 |
+
+C5 探測，全部在容器裡以 `dw` 身分跑：
+- 能連：`api.anthropic.com:443`。
+- 連不上（REJECT 或 DROP）：
+  - `curl https://example.com`（0.09 秒內被拒）、`example.com:443`、`1.1.1.1:443`（直接用 IP）、`github.com:443`、`api.anthropic.com:80`
+  - `host.docker.internal:443`、gateway 的 22 和 2375（docker API）
+  - 對 resolver 以外的 DNS（9.9.9.9）、IPv6
+- 做不到：
+  - 以 `dw` 改 iptables、`su` 成 root（沒有 sudo）
+  - 寫 `/` 和 `/usr/local/bin`、寫 `/director` 和 `/director/orders`、掛 tmpfs
+- 都沒有：capability（Inh、Prm、Eff、Bnd、Amb 全 0）、docker socket、`/mnt/c`、`/mnt/d`、`~/.ssh`、`~/.config/gh`、像憑證的變數名稱。
+- `git status`、`git commit`（帶 `-c user.name=... -c user.email=...`）照常可用，主 checkout 和 linked worktree 都實測過；commit 後主機上的 `git worktree list` 照常。
+- 在容器裡真的跑 `git worktree prune`：exit 0，但別的 worktree 的紀錄都還在（寫不進唯讀的 `worktrees/`）；linked worktree 自己的紀錄也還在，`prune -n` 什麼都不列。
+
+已知風險：
+- **K1：`.git` 整個可寫（只剩舊的 `--git-common`）。** 1.2.0 的 `--clone` 已經解決：原 repo 不掛進容器，worker 只動得到自己的 clone，總監只收那一條分支。下面是 `--git-common` 仍有的情況，實測在容器裡能做到：
+  - 移動或刪除別的 branch 的 ref、打 tag、改 `packed-refs`、寫 objects。
+  - `hooks/` 和 `config` 唯讀之後，放 hook、設 `core.hooksPath`、加 alias 都擋下了。這三條是「容器裡寫、主機上跑」的路。
+  - `worktrees/` 唯讀之後，容器裡的 `git worktree prune` 刪不掉別的 worktree 的紀錄。代價：容器裡不能 `git worktree add`；`git gc` 有別的 worktree 時會 exit 128（它要改別的 worktree 的 reflog），要 gc 就在主機上跑。
+  - 剩下的會影響 ref 的正確性，但不會在主機上執行東西。總監驗收時用 `git rev-parse <worker 分支>` 取候選 commit，不信 worker 寫的 ref。
+  - worktree 本身的檔案（腳本、`.claude/settings.local.json`）容器裡照樣能改，主機上之後有人跑它就會執行。這和不用容器時一樣，靠 hook_guard 的 G40 和審查。
+- **K2：drvfs 慢，filemode 不同。** `/mnt/d` 上的 git 慢很多（上表：`git status` 約 28 倍、`add` 加 `commit` 約 50 倍）。`--clone` 把 clone 放在 WSL 的 ext4 就沒有這個問題。image 設 `core.filemode false`，免得 `/mnt/d` 上每個檔都顯示權限改了。
+- **K3：Desktop 開的 session 不在容器裡。** 只有用 `run_worker.sh` 開的 CLI worker 有隔離。
+- **K4：容器用的是 account B 的額度。** 第一次要 PO 在容器裡 `/login`。憑證只存在 volume 裡，DW 不碰。
+- **K5：容器裡的 Claude Code 版本另外釘。** 和主機分開升級；doctor 在容器裡報的是容器裡的版本。
+- **K6：容器裡的設定寫的是容器路徑。** 在容器裡跑 `setup_project_settings.py`，hook 指令和 audit log 路徑都是 `/work/...`、`/repo-git/...`，這份 worktree 之後只能在容器裡用。audit log 檔名 1.2.0 起是 `{worktree}-{container}.jsonl`：`{worktree}` 是 `DW_WORKER_NAME`（`run_worker.sh --name`），`{container}` 在 hook 執行時換成容器 ID 前 12 碼。所以同一個 repo 開兩個容器 worker 各寫各的紀錄，每份各自一條鏈；`--rm` 每次開容器 ID 都不同，所以每次開容器也是新的一份。
+- **DNS 剩下的路。** 1.2.0 的 `dns_allow.py` 只回答白名單名稱，資料不能再藏在任意名稱裡送出去。剩下的：
+  - 白名單名稱的查詢仍會到上游，上游看得到名稱、A 或 AAAA、時間。
+  - 查詢的時間點（查或不查、隔多久查）可以當成很慢的隱密通道。
+  - `*.` 開頭的名稱可以查任意子網域，資料能藏在子網域名稱裡；預設清單沒有 `*.` 名稱，加之前要想清楚。
+- **IP 只在開容器時解析一次。** `api.anthropic.com` 的 IP 在 session 中途換掉，連線就會失敗，要重開容器。
+
+## usage_mix.py（1.3.0）
+
+```text
+python -I -X utf8 usage_mix.py --since 2026-11-01 [--until ...] [--session <id 前綴>] [--project-dir <資料夾名>] [--all] [--by-session] [--json] [--check]
+```
+
+- 讀 `~/.claude/projects` 的對話紀錄（含 subagent），每次呼叫算額度等價量：輸入 × 1 + 快取寫入 × 1.25 + 快取讀取 × 0.1 + 輸出 × 5（每 token），平分給它選的工具呼叫。同一個 `message.id` 拆成幾行的先合併（L-035），分叉或續接的 session 重複的只算一次。
+- 印五大類的比例和門檻（讀和查 ≤ 30%、實際動手 ≥ 30%）、細類、各 session 的比例，最後一行 `RESULT ON_TARGET|OFF_TARGET`；`--check` 沒達到就 exit 1。
+- shell 指令依序歸類（1.3.1 把原本的 `shell_other` 拆開）：`wait_board`、`render`、`engine_run`、`log_check`、`git`、`disk`；python 執行（`python`、`py -3`、`pytest`、`uv run`、直接跑 `.py`）是 `python_other`，帶審查工具名的是 `review_tools`；`build`（make、cmake、msbuild、dotnet、cargo、npm、node、gcc、pip 等編譯建置）；`list_files`；`shell_search`（grep、rg、findstr、Select-String）；`file_ops`（cat、sed、cp、mv、mkdir、rm、echo、Copy-Item、Set-Content 等）；`sys_query`（程序、版本、環境變數、網路）；剩下的才是 `shell_other`。`build` 和 `python_other` 算實際動手，其他算讀和查。
+- `--by-session`（1.3.1）：每個 session 一行（它的 subagent 算在它身上），依花費排序：佔總量比例、呼叫數、等價量、五大類比例、花最多的五個細類。`--top N` 只列前 N 個、不含細類。
+- RESTART 行：新 session 第一次呼叫的上下文、新 session 或壓縮後到第一個實際動手的呼叫數和等價量、依上下文大小的單價，和由這些算出的損益兩平點（`docs/04`「開新 session 划不划算」）。
+- 損益兩平點背後的樣本（到實際動手的新 session 數、>=170K 和新 session 那一段的呼叫數）最少的一項少於 5 個時，印 `RESTART break-even NOT_ENOUGH_DATA (n=…)`，不下結論（2.5.0；`--min-cases N` 可調）。
+- `--reads [N]`（2.5.0）：在 LOOPS 前多印 `READS` 行，列出被讀最多次的前 N 個路徑（預設 20）、次數和加權成本（Read 工具，以及 cat / head / tail / `sed -n` / Get-Content 這類讀檔命令）。用來找出可以改成摘要或快取的重讀。路徑只印在本機畫面，不寫入任何檔案；沒有 `--reads` 時不印路徑。
+- 3.0.0（D7）：被計入的呼叫裡，usage 欄位不是非負數（布林值、文字、負數、無限大、usage 不是物件）時，那個值算 0，結果多 `partial`、`invalid_count`、`invalid_fields`，RESULT 前多一行 `PARTIAL usage: …`。範圍外的呼叫不算。exit code 不變。
+- LOOPS 行（2.4.0）只算 `--since`／`--until` 範圍內的呼叫，依每次呼叫自己的時間（2.5.0 修正：2.4.0 用檔案修改時間挑整份 transcript，加了 `--until` 仍是「到現在為止」的累計）。
+- `--patterns <檔>` 加專案自己的字（執行檔、審查工具名、建置指令），讓 shell 指令歸到對的類別；鍵可以是 `wait_board`、`render`、`engine_run`、`log_check`、`git`、`disk`、`review_tools`、`list_files`、`review_read`、`engine_mcp`、`python`、`build`、`shell_search`、`file_ops`、`sys_query`。專案字只放在那個檔，不進工具。
+- 只印比例和數字，不印訊息內容。紀錄格式不是官方介面，改版後可能讀不到；讀不到就印 UNKNOWN，不印 0。
+
+## status_gen.py（1.3.0）
+
+```text
+python -I -X utf8 status_gen.py --out <線的資料夾>/status.py --log <log> --hash-file <檔> --outputs <資料夾> --disk <WS> --disk-min-gib 20 --git <worktree>
+python -I -X utf8 status_gen.py --out <DIRECTOR>/status.py --config templates/status_director.json   # 總監版：先把路徑改成專案自己的
+```
+
+- 產生的 `status.py` 只讀、只用標準庫，總長最多 `--max-lines` 行（預設 60），每行最多 `--width` 字；超過時頭尾都留，行內最長路徑（路徑太短就整行）的中段換成 `…`，行尾的狀態字（OK、LOW、計數）不會被切掉（2.2.4）。大 log 從檔尾讀，不整份讀進來。
+- 一般段：LOG（log 尾段）、HASH（雜湊檔尾段、`--checksum` 檔的 SHA-256）、DISK（GiB）、GIT（分支、領先 / 落後、改動數、最近的 commit）、OUT（最新輸出）。
+- 總監段（設定檔，都選用）：`po_page`（待決頁的計數：每項一個 regex，或 JSON 頁的 `list` 加 `field` / `value`）、`orders`（沒有結案字樣的工單）、`pending_sends`（還沒勾的 `- [ ]`）、`audit`（每份動作紀錄最近 `hours` 小時的筆數、被擋次數、讀 log 次數、session 數；讀 log 的判斷照抄 `poll_hint.py`）、`processes`（命令列含某字串的程序有沒有在跑）、`loops`（3.0.0 B10，取自 agy 2.3.0-ds.6：`{"path": "loops.json"}`，讀 `loop_guard.py scan --out loops.json` 寫的 JSON，印一行 LOOPS：檔案多久前更新、findings 數、有找到的類別次數、這份輸入查不到的類別（`bad_args=NOT_CHECKED`、`child_error_unhandled=NOT_VERIFIED`）、events／streams；掃描沒讀到任何呼叫印 NO_DATA；`agy_audit.py loops --out` 的格式也讀得懂。找到打轉不改 exit code，檔案在檢查點重跑 scan 更新）。
+- 讀不到的路徑印 MISSING；磁碟低於門檻、讀不到待決頁或 LOOPS 檔、程序沒在跑時 exit 1。
+- 2.1.0（shadow）：待決頁是文字頁（沒有 `extract`）時，若有項目 `STATUS: open` 但 `ANSWER:` 已填（不算空白或 `<…>` 佔位），多印一行 `PO hint: N item(s) still STATUS open with an ANSWER filled in (ID…)`：PO 可能已回覆但沒改狀態，計數會漏掉，要到頁上讀。exit code 不變。
+- 2.2.0（shadow）：總監版設了 `po_page` 時，待決頁旁邊的 `DIRECTOR_STATE.md`（或 `po_page.state` 指定的路徑，相對於設定檔）沒有 `PO_PAGE_URL:` 開頭的行，多印一行 `~ PO_PAGE_MISSING: <路徑> has no PO_PAGE_URL line; publish and pin the PO page (BOOTSTRAP step 6)`，exit code 不變。2.2.0 以前建置的專案會看到它：照 `docs/11`「待決頁網頁的授權與備援」取得同意後補建，或寫 `PO_PAGE_URL: NONE reason=<原因>`。舊的 `status.py` 要用新 `status_gen.py` 重新產生（`--force`）才會印。
+- 已存在的 `--out` 要加 `--force` 才覆蓋。
+
+## dispatch_check.py（2.5.0）
+
+```text
+python -I -X utf8 dispatch_check.py --log DIRECTOR_LOG.md [--table <表.json>] [--strict]
+```
+
+- 每一筆 `DISPATCH <WO-ID> rev=<n> sha=<雜湊>` 行在 `|` 欄寫 `class=<難度類別> effort=<等級>`（可加 `model=`），gate_check 照樣讀得到。
+- 預設表（`docs/05`「派工難度表」）：`mechanical` off/low（3.0.0 B18：`off` 是不思考，給只照清單做的機械工作，平台有才用，例如 DeepSeek；Claude Code 沒有 off，用 low）；`routine` medium/high；`dev`、`ui` high；`root_cause`、`fix_after_fail`、`realism`、`core_engine` xhigh；`repeated_failure` xhigh/max。`--table` 用 JSON 換掉整張表。3.0.0 B11：沒給 `--table` 時，規則 checkout 裡唯一的 `adapters/*/EFFORT_TABLE*.json`（例如 dshdw 的 `adapters/deepseek/EFFORT_TABLE_DSH.json`）就是預設表，印一行 `~ TABLE <檔>`；不只一個是輸入錯誤（exit 2，請給 `--table`）；沒有（基板、裝好的 `DIRECTOR/tools/`）用上面的表。
+- 沒寫、類別或等級不認得、等級不在表裡：印 `~ WARN EFFORT <WO-ID> line <n>: …`；最後一行 `DISPATCH_CHECK: OK|WARN records=n warnings=n`。只提醒，exit 0；`--strict` 有 WARN 就 exit 1；檔案讀不到或表格式錯 exit 2。
+- 重複派工（`--dup "<標題和範圍>" [--resume "<glob>"]... [--repo <repo>]... [--since "14 days ago"] [--threshold 0.5]`）：新任務的字和各線 RESUME_STATE 的 `NEXT_STEP:`、各 repo 最近的 commit 標題比 token Jaccard（共同字 ÷ 全部字；中日文用相鄰兩字）。達門檻的印 `~ WARN DUP <分數> <來源>: <內容>`，最後一行 `DUP_CHECK: OK|WARN compared=n matches=n threshold=x`。可能誤報，看過再決定。
+
+## delete_guard.py（2.5.0）
+
+```text
+python -I -X utf8 delete_guard.py [路徑 ...] [--list <清單>] [--repo <repo>]... [--refs "<glob>"]... [--no-basename]
+```
+
+- 每個候選用完整路徑（`/` 和 `\` 都試）和檔名去找；`--no-basename` 只找完整路徑。不分大小寫。
+- `--repo`：那個 repo 的追蹤檔（`git grep -F -i -I`）；`--refs`：其他宣告輸入的檔（RESUME_STATE、PLAN、工單），glob 可用 `**`。檔案自己提到自己不算。
+- 印 `REFERENCED <候選> (n places)` 加最多 5 個 `檔案:行號`（不印那一行的內容），或 `CLEAN <候選>`；最後一行 `DELETE_GUARD: REFERENCED|CLEAN candidates=n referenced=n`。
+- exit 1 有被引用、0 全部乾淨、2 輸入錯誤（沒有候選、清單讀不到、`--repo` 不是 git repo、沒有 git）。只讀，從不刪、不搬。刪除流程見 `docs/06b`「刪檔之前」。
+
+## round_check.py（1.3.0）
+
+```text
+python -I -X utf8 round_check.py [--dir <worktree>]        # 資料夾裡每份 RESUME_STATE*.md
+python -I -X utf8 round_check.py --resume <RESUME_STATE.md> ...
+```
+
+- RESUME_STATE 的 `FIX_ROUNDS:` 每個缺陷一行：`- <缺陷>: round=<n> set=<n> study=<檔名>|NONE`。`set` = (round − 1) // 3 + 1。
+- 第 4 輪起，研究檔要存在，而且每個做完的組都有 `## SET n`（或 `## <缺陷> SET n`）一節，填了 `WHERE:`、`ALTERNATIVES:`、`DECISION:`（`docs/07` 第 4 節）。
+- 每個缺陷印 OK / FAIL，最後一行 `ROUNDS: PASS|FAIL files= defects= failed=`；有 FAIL 或找不到 RESUME_STATE 就 exit 1。專案的 guard_check 對每個 worktree 跑它。
+- 2.5.0：第 2 組（之後每組）沒過，研究檔那一節要寫獨立診斷 `DIAGNOSIS_BY:`（不同的審查者或模型）和 `DIAGNOSIS_RESULT:`；有寫 `IMPLEMENTER:` 時兩者要不同。沒寫或相同印 `~ WARN NO_INDEPENDENT_DIAGNOSIS`，不改 exit。
+
+## poll_hint.py（1.3.0）
+
+- PostToolUse hook（matcher `Bash|PowerShell`）。`tail`、`Get-Content`（`gc`、`cat`、`type`，以及 `head` / `less` 讀 .log .out .err .txt）算一次讀 log。同一個 session 在 `--window` 秒（預設 600）內第 3 次讀同一份檔，就回一段提示「等完成通知」，計數歸零。永遠 exit 0，不擋。
+- 安裝（專案的 `.claude/settings.local.json`）：
+  ```json
+  "PostToolUse": [{"matcher": "Bash|PowerShell", "hooks": [{"type": "command", "command": "\"<PYTHON>\" -I -X utf8 \"<DW>/tools/poll_hint.py\""}]}]
+  ```
+- 報告：`poll_hint.py report --log <動作紀錄或 glob> [--log ...] [--since 2026-11-01 | --days 7] [--sessions <sessions 檔>] [--json]`，每個 session 一列：讀幾次、幾份檔、最常讀的檔、提示會出現幾次。最後一行 `POLL_REPORT: sessions= log_reads= hints= lines= logs= since=`。只讀。
+
+## report_vs_audit.py（1.3.0）
+
+```text
+python -I -X utf8 report_vs_audit.py --report <報告.md> --log <動作紀錄.jsonl> [--log ...] [--session <id>] [--tolerance-min 15]
+```
+
+- 報告裡的主張來自兩處：`RAN:` 行（`` RAN: `指令` exit=0 at=19:40 ``，exit 和 at 可省），以及 TESTS / EVIDENCE / DONE 欄位裡看起來是跑 selftest、Unity、Blender 或雜湊檢查的 `` `指令` ``（同一行的 `exit=N`；PASS、OK、通過 當成 exit 0）。
+- session 取 `--session`，沒有就取報告的 `SESSION_ID:`，再沒有就取紀錄裡唯一的 session_id；都沒有就 exit 2。
+- shell 指令比對同一個 session 的 Bash / PowerShell 紀錄（空白、引號、斜線方向不計；紀錄被截在 500 字的比前段）；`mcp__` 工具比對工具名。exit 0 要有一筆 ok，其他 exit 要有一筆 error；有 `at=` 就要在誤差內。只被 hook 擋下的會寫明。紀錄的雜湊鏈斷了印 `FAIL log: hash chain`。
+- 最後一行 `REPORT_VS_AUDIT: PASS|FAIL|NONE claims= ok= failed= session= logs= unverified=`（`unverified=` 是 2.2.4 加的，放在最後）；FAIL exit 1，不能跑 exit 2。
+- 只證明「有跑、結果和報告一致」，不證明跑的內容對；動作紀錄沒有 exit code，用 ok / error 判斷。
+- 2.2.3（L-052、L-054）：
+  - 換行、`;`、`&&`、`||` 把指令切成幾段（兩邊都切，每段各自去掉啟動程式），多段的主張可以對到 heredoc、跨行 `python -c`、PowerShell here-string 這類多行腳本，順序要一樣；`RAN:` 下面用 ``` 包起來的一段算一個主張，exit / at 寫在結尾的 ``` 後面（沒收尾的不算）。
+  - `at=13:17（備註）` 只取時間；主張裡的全形（備註）不比；一個詞列了幾個編號（`AC-1/AC-2/AC-4`、`AC-1/2/4`、`AC-1..AC-5`）時每個編號都要有一筆，缺的那個會點名。
+  - 有省略的主張（`...`、`x...`、只有中日文的詞如「同上」）可以跳過紀錄裡的選項（`-x` / `--x` 加一個值）；`427fcef...` 對到以它開頭的詞；`wo-003` 對到以它開頭、接著 `-`、`_`、`.` 的檔名。被截的紀錄行，主張有 3 個詞一路對到行尾也算。
+  - 比到幾筆時，顯示最接近 `at=` 的那筆（沒寫 at 就是最後一筆）。沒有一筆結果相符、而那筆在主張之後還跑了別的指令時，狀態是後面那段的，所以印「exit=N not checkable」，算 OK。
+  - 兩種 shadow WARN（exit code 不變）：`RAN:` 清單裡沒有 `` `指令` `` 的一行（沒東西可比）；報告寫 `SCOPE_CHECK: … PASS`，但跑了報告裡多數指令的那個 agent 最後一次 commit 之後沒有成功跑過 `scope_check.py`。
+- 2.2.4（WO-DS-006 試跑重跑出的 64 條誤判，去識別後做成 selftest 案例）：
+  - 變數先展開再比：同一呼叫或同一 agent 較早的呼叫裡的指定（`X=v`、`export X=v`、`$x = 'v'`、here-string、`$env:X = v`、`set X=v`、PowerShell 的 `a + b`）給 `$X`、`${X}`、`$env:X`、`%X%` 值；找不到值的變數在它那個詞裡代表任意文字。
+  - `git -C DIR x` 當成 `cd DIR ; git x`；全形 `；` 也是分句。字中的 `...`／`…` 代表任意文字（`.../repo`、`<WS>/.../x.py`）；7 位以上的短 hex 對到以它開頭的完整 hex；宣告的絕對路徑可以對到紀錄裡以它結尾的相對路徑；兩個中日文詞之間的詞一起略過。
+  - `at=` 收 `HH:MM:SS` 和區間 `HH:MM–HH:MM`（區間長度加進誤差）；`AC-1 .. AC-6` 有空格也算範圍；選項順序不同（每個選項連同它的值）也算同一條指令；`python -c "..."` 去掉啟動程式後太短時連啟動程式一起比。
+  - RAN: 之前就開的 ``` 圍欄不算 RAN 區塊。多段主張沒有一筆呼叫全包時，可以依時間順序在不同呼叫裡逐段找到（OK，附註記）。
+  - **UNVERIFIED**（in log cut part）：主張在任何呼叫都找不到，但 `at=` 範圍內有一筆被截在 500 字的呼叫、而且同一報告另一條指令對到了它。主張可能在被截掉的那段，紀錄證明不了有跑、也證明不了沒跑，所以是獨立狀態：不算 OK、不算 FAIL，最後一行另計 `unverified=n`，exit code 不變；審查的人要自己看這幾條。在截斷呼叫留下來的那段就對得到的主張仍是 OK。
+  - harness 對應的工具（紀錄的 `tool_raw`，例如 pwsh）在這個 session 從沒有 error 狀態時，狀態不帶 exit code：宣告 exit 不是 0 印「not checkable」。
+  - 沒有人跑的指令照樣 FAIL（selftest 有對照組）。
+- 2.2.1：被截在 500 字的紀錄行照 JSON 規則解回（`\"`、`\\` 還原；2.2.0 沒還原，含引號或反斜線路徑的長指令比不到）。比對前去掉 `&`、`cmd /c`、啟動程式（python、py、pwsh、powershell、node、bash 等）和它的啟動旗標；`...`、`…`、`<名稱>` 當萬用字；單一檔名可以對到以它結尾的較長路徑；靠詞比對時至少要 2 個實詞（只寫啟動程式不算）。只比 Bash / PowerShell 的紀錄。紀錄有 `kind=rebuild` 行時多印 `~ note: a log was rebuilt from a transcript ... (by <重建工具>)`，重建工具取自那一行的 `source.by`（`transcript_audit.py`，或變體自己的重建工具，例如 dshdw 的 `dsh_audit.py build`；沒寫就當 `transcript_audit.py`）。
+
+- 2.2.5（WO-DW-225 B2，WO-DS-008 r2 的誤報與時間錯）：
+  - `at=` 收全形 `～`／`〜` 區間；`--tolerance-min` 預設 10。
+  - 比對前兩邊都拿掉只設 TEMP / TMP / TMPDIR / PYTHONIOENCODING / PYTHONUTF8 的句子，和指令前面的這類指定（`TEMP=x python ...`、`env TEMP=x ...`）。
+  - 紀錄裡的相對路徑另外照那筆呼叫的資料夾（輸入的 `workdir` / `cwd`、同一呼叫較早的 `cd`、`Set-Location`、`pushd`）解成絕對路徑再比；Git Bash 的 `/<碟>/x` 等於 `<碟>:/x`。shell 函式定義（`name(){ ...; }`）先拿掉，呼叫處展開。
+  - 一句的主張可以少寫紀錄裡的選項（OK，附註少了哪些），但會削弱執行的選項（`-f`、`-n`、`-k`、`--force`、`--warn`、`--dry-run`、`--no-...`、`--skip...`、`--allow...`、`--ignore...`、`--quick`、`--only` 之類）少寫照樣 FAIL。
+  - 每條 FAIL 標類別：`沒跑 / 時間不符 / 結束碼不符 / 格式`；最後一行多 `time_mismatch=n not_run=n`。沒跑的主張，`at=` 附近開頭兩個詞相同的呼叫列為提示。
+  - `--lead 檔`（可重複）：查 lead 自己寫的檔（GATE_VERDICT、DIRECTOR_LOG）。RAN 行照樣當主張；每一行以 `YYYY-MM-DD HH:MM` 開頭的時間戳，拿最早把這一行寫進去的那筆呼叫比：比呼叫晚 1 分鐘以上、或早超過 `--tolerance-min`，FAIL（時間不符）。加 `--repo` 時，寫了 COMMIT 和 7 位以上 hex 的行另外和那個 commit 的時間比。找不到寫入呼叫的行另計 `stamps_unfound=n`。
+  - 最上層攔下所有例外，exit 2 一行，不印 Traceback。
+  - 時間不要手打：RAN 行和時間戳用 `ran_line.py` 產生。
+
+## ran_line.py（2.2.5）
+
+```text
+python -I -X utf8 ran_line.py --to <報告.md> -- <指令> [參數 ...]       # 代跑，寫一行 RAN；exit code 是指令的
+python -I -X utf8 ran_line.py --to <報告.md> --exit <N> --cmd "<指令>"  # 剛在別處跑完，馬上補記（at= 是現在）
+python -I -X utf8 ran_line.py --stamp [--to <檔>] [--text "| <事件> | <依據>"]   # 印或加一行 YYYY-MM-DD HH:MM
+```
+
+- 時間取時鐘、exit code 取指令本身，不靠模型記憶（WO-DS-008 r2：報告差一小時、裁決時間晚 15 分鐘）。RAN 行接在報告 `RAN:` 區塊最後一行後面；沒有 `RAN:` 就在檔尾加。跨分鐘寫 `at=HH:MM-HH:MM`。
+- `--print` 只印不寫；`--utc-offset +08:00` 指定時區。只寫 `--to` 指定的檔。指令起不來或寫不了檔：一行訊息、exit 2，不印 Traceback。
+- 設了環境變數 `WORK_DIR` 時，`ran_line`、`evidence_record`、`release`、`browser_check` 把暫存檔（`tempfile` 和子行程的 TMPDIR / TEMP / TMP）放到 `WORK_DIR/tmp`（2.2.5，B9）。原因：Git Bash 自己匯出 TMPDIR，Python 的 tempfile 先讀 TMPDIR 才讀 TEMP，所以 `export TEMP=...` 對 Windows Python 沒用；agent 每次 Bash 呼叫又是新的 shell。
+- 不是每輪必讀：寫報告、裁決、LOG 時才用。
+- 怪檔案自測（2.2.5，B7）：`python -I -X utf8 <RULES>/templates/weird_inputs.py <資料夾>` 寫出空檔、BOM、控制字元、超長行、深層巢狀、錯誤編碼、UTF-16、混合換行、全形字元各一個檔，讀檔的工具逐一餵過，要給清楚的訊息或正確結果，不能出 Traceback。
+
+## transcript_audit.py（2.2.1）
+
+```text
+python -I -X utf8 transcript_audit.py build --out <新紀錄.jsonl> [--force] --transcript <transcript.jsonl> [--transcript ...]
+python -I -X utf8 transcript_audit.py build --out <新紀錄.jsonl> [--force] --session <ID> [--project-dir <專案資料夾>] [--root <~/.claude/projects>] [--no-subagents]
+```
+
+- 沒裝 hook 做完的工作，從本機 transcript 重建一份 `audit_log.py` 格式的紀錄：每個有結果的工具呼叫一行，`input` 用 `audit_log` 同一段程式遮罩、截在 500 字；`is_error` 的結果是 `kind=failure`（使用者中斷是 `interrupted`），其他是 `kind=result`；依結果的時間排序後串成雜湊鏈。`audit_log.py verify` 和 `report_vs_audit.py` 照讀。
+- `--transcript` 也讀旁邊的 `<檔名>/subagents/*.jsonl`（`--no-subagents` 不讀）。`--session` 找 `<root>/<專案資料夾換成 - 的名字>/<ID>.jsonl`。
+- 第 1 行是 `kind=rebuild`，`source` 記來源 transcript 的名稱、sha256、大小，和 `no_result`（還沒有結果，不寫）、`duplicates`（同一個 id 又出現，留第一筆）、`no_time`、`bad_lines` 的數目。
+- 印 `TRANSCRIPT_AUDIT file= lines= sessions= no_result= duplicates= no_time=` 和新紀錄的 `AUDIT_HEAD`。exit 0 寫好；1 拒絕（`--out` 已存在）或沒寫成；2 不能跑（沒有 transcript、找不到工具呼叫、參數不對）。
+- 2.2.5：`input` 預設整段保留，不再截在 500 字；`--input-limit N` 才照 hook 截，截過的行加 `"input_cut": true`，`report_vs_audit` 只比那筆的前段。
+- 限制：`result.sha256` 算的是 transcript 裡的結果，和 hook 紀錄的不能互比；`duration_ms` 是 null；hook_guard 的 decision 行無法重建。transcript 格式是 Claude Code 自己的、沒有文件，格式改了會找不到工具呼叫並 exit 2。重建的紀錄只表示 transcript 裡有什麼，不能證明沒做別的事；有 hook 紀錄和 AUDIT_HEAD 錨點時，以那份為準。
+
+## browser_check.py（2.2.0）
+
+用無頭 Chrome 和假的 Artifact SDK 檢查選擇頁的行為（F04 F05 F07 頁面端）：錯指紋或舊格式回覆不會藏起題目、回條只配給總監採用的回覆、指紋不符禁止送出、重送沿用同一個 submissionId。
+
+```
+python -I -X utf8 browser_check.py [--chrome <Chrome 路徑>] [--page <choice_page.html>]
+```
+
+找瀏覽器的順序：`--chrome`、環境變數 `DW_CHROME`、PATH 上的 google-chrome／chromium／chrome、Windows 的 Chrome 與 Edge。找不到：印 `SKIP browser_check: …` 並結束碼 0；`DW_REQUIRE_BROWSER=1`（CI 用）時結束碼 1。每項印一行 `名稱=True/False`，任一項 False 結束碼 1。selftest 不依賴它。
+
+## choice_reconcile.py（2.2.0，shadow）
+
+```text
+python -I -X utf8 choice_reconcile.py register --db <DIRECTOR>/choice_inbox.sqlite3 --snapshot <一題一版.json>
+python -I -X utf8 choice_reconcile.py publish  --db <DIRECTOR>/choice_inbox.sqlite3 --question CH-01 --revision 2 | --close
+python -I -X utf8 choice_reconcile.py ingest   --db <DIRECTOR>/choice_inbox.sqlite3 --export <從選擇頁讀回來的.json> [--source <artifact id>]
+python -I -X utf8 choice_reconcile.py rescan   --db <DIRECTOR>/choice_inbox.sqlite3
+python -I -X utf8 choice_reconcile.py plan     --db <DIRECTOR>/choice_inbox.sqlite3 --question CH-01 --revision 2 [--wo WO-012] [--orders <DIRECTOR>/orders]
+python -I -X utf8 choice_reconcile.py advance  --db <DIRECTOR>/choice_inbox.sqlite3 --question CH-01 --revision 2 --from QUEUED --to CLAIMED --session <名字> [--generation N] [--result <文字>]
+python -I -X utf8 choice_reconcile.py settle   --db <DIRECTOR>/choice_inbox.sqlite3 --key <來源鍵> --to NOTED|SUPERSEDED|CLOSED [--result <文字>]
+python -I -X utf8 choice_reconcile.py status   --db <DIRECTOR>/choice_inbox.sqlite3 [--now <ISO>] [--late-min 10] [--stuck-min 30] [--json]
+```
+
+- 選擇頁回覆的本機帳本（`docs/12` 第四、六節），一個 SQLite 檔：`revisions`（每題每版的快照和 hash，登記後不能改）、`questions`（頁面上現在是哪一版、題目開或關，和快照分開記）、`inbox`（每筆回覆一列，用來源鍵和冪等鍵去重）、`decisions`（每題每版最多採用一筆和它的狀態）、`effects`（固定的 WO 編號、持有者、世代、結果）、`events`（每一步誰動的）、`quarantine`（讀不懂的那幾筆）。
+- 回覆身分是 `questionId + revision + snapshotHash + submissionId`；冪等鍵是 `<source>|<kind>|<submissionId>`（`docs/12` 第六節）。
+- `register` 印 `snapshotHash=sha256:…`（JSON 排序鍵、UTF-8、不含 `snapshotHash` 和 `id`）；同一版內容不同就 `REFUSED`，exit 1。一題第一次登記時同時當成現行版；之後的新版只存快照，等 `publish`。
+- `publish --revision N` 把現行版指到 N（要先登記過）；`--close` 記成題目已關。之後所有回覆重判一次，印 `REEVALUATED <來源> <舊> -> <新>`。匯出裡的 `decisions`、或新版的有效回覆，也會帶動現行版。
+- `ingest` 的 JSON：`{"source": "<artifact>", "decisions": [...], "choiceReplies": [...], "notes": [...]}`，每筆是 db 的欄位加 `id`。匯出沒有最上層 `source` 時用 `--source` 補；兩者都沒有就當成 `artifact` 並印 `WARNING`（同一筆換一份匯出重送會多算一次）；兩者不同時以匯出的為準，也印 `WARNING`。逐筆讀：讀不懂的那筆進隔離區（`QUARANTINED <來源> reason=`），其他照記。新題的回覆用登記時存的選項重建 `choice` 指的那個選項，跟回覆的 `selectedOptionSnapshot` 比 `key`（有 `label` 也比 `label`）；不一致進隔離區（`reason=snapshot_mismatch`），不記帳、不排工。回覆沒附 `selectedOptionSnapshot`（舊頁面）或那一版還沒登記，照記並印 `WARNING`，不擋。每筆標 `ok`、`legacy`（2.0 舊題）、`note`、`duplicate`、`conflict`、`conflict-late`（題目已採用別的答案後才到）、`conflict-same-submission`、`stale`、`question-closed`、`bad-hash`、`bad-choice`、`unknown-revision`；`ok`、`legacy` 以外的只記錄，進 `RECEIPT_PENDING`，要回給使用者。`unknown-revision` 在快照登記後自動重判；重判時選項對不上的改標 `snapshot_mismatch`，留在 `RECEIPT_PENDING`，不會排工。題目已關閉的 2.0 舊答案記成 `legacy-closed`，直接 `CLOSED`。重送的留言記 `duplicate`，直接 `CLOSED`。再跑一次同一份不會多記（`already=`）。
+- `rescan` 重讀隔離區和等快照的回覆。
+- `plan` 在 `BEGIN IMMEDIATE` 裡採用最早一筆 `RECORDED` 回覆，先查這一版還能不能做（現行版、hash、題目開著、沒有登記了卻還沒上頁面的新版）：新版待發布印 `HOLD`，其他不符印 `REFUSED`，exit 1。可以就給固定 WO 編號（沒給 `--wo` 就取帳本和 `--orders` 裡最大號加一），印 `PLANNED <鍵> <WO> ... identity={...}`；再跑還是同一張（`already`），已經不能做時多印 `WARNING` 和下一步 `advance --from <目前狀態> --to RECONCILE`。沒有可採用的回覆 `NOTHING`，exit 1。
+- `advance` 只照 `RAW → RECORDED → PLANNED → QUEUED → CLAIMED | RECONCILE → RECEIPT_PENDING → CLOSED`（`PLANNED | QUEUED | CLAIMED → RECONCILE`、`RECONCILE → CLAIMED | QUEUED`）走；不是一步 exit 2。動到 `CLAIMED` 或 `RECONCILE` 的要 `--session`，沒給 exit 2。狀態已經不是 `--from`、或 `--generation` 不對，就 `LOST`，exit 1。領取時再查一次版本，世代加 1，記下持有者；只有持有者能交成 `RECEIPT_PENDING`，別人（含 2.1 沒有持有者的領取）`REFUSED`，要先 `CLAIMED → RECONCILE` 接手。持有者以外的人接手一定要帶 `--generation <看到的世代>`，沒帶印 `REFUSED ... a takeover needs --generation N`，exit 2；接手記一筆 `takeover from <原持有者>`。
+- `settle` 結案沒被採用的那幾列：留言 `NOTED`、被取代 `SUPERSEDED`、回給使用者後 `CLOSED`；`--key` 是隔離區的來源鍵時 `CLOSED` 代表確認是垃圾，之後不再提起。已被採用的要用 `advance`，exit 1。
+- `status` 列出還沒結束的：只有 `ok`、`legacy` 的 `RECORDED` 回覆超過 `--late-min` 分才標「沒交出去」，留言另計 `notes=`；`PLANNED / QUEUED / CLAIMED / RECONCILE` 超過 `--stuck-min` 分標「收到但卡住」；版本已不能做、2.1 沒有持有者的領取另有提示。`receipts_pending` 算所有還在等回條的回覆（含已採用的）。最後一行 `CHOICE_RECONCILE: open= not_handed= stuck= receipts_pending= notes= reconcile= quarantined= clear=yes|no states= (shadow: hints only)`，一律 exit 0；沒有帳本也 exit 0。`status` 打開 2.1 的帳本時也會升級它（見下），不是唯讀。`--json` 只印一份 JSON（`schema: dw-choice-status/2`，摘要行在 `summary`），沒有帳本、帳本壞了也一樣。
+- 帳本檔壞了、壞 `--now`、資料夾不存在：`register` 以外的指令只印 `CHOICE_RECONCILE: SHADOW_ERROR <原因>`，exit 0（`status --json` 印成一份 JSON）；`register` exit 2。`publish` 找不到快照、版本不對是 `REFUSED`，exit 1。帳本被另一個總監鎖住超過 `--busy-timeout`（預設 5 秒）：每個指令都印 `CHOICE_RECONCILE: BUSY <原因>`，exit 1（`status --json` 印一份 `"busy": true` 的 JSON），什麼都沒改，稍後重跑。只有 `MOVED`、`PLANNED`、`SETTLED`、`PUBLISHED` 代表狀態真的改了。
+- 2.1 的帳本第一次被打開時自動升級（`PRAGMA user_version` 2）：先在升級的鎖內備份：複製到暫存檔，`PRAGMA quick_check` 通過、確定是 2.1 的帳本，才取名 `<帳本>.v210.bak`；這個名字已有檔案（例如上次留下的空檔或半截檔）就改用 `<帳本>.v210.bak.<UTC 時間>`，不覆寫。備份失敗就不升級，原帳本不動。之後補欄位和新表，每題最新一版記成現行版（來源 `backfill-2.1`），舊回覆補冪等鍵，已領取的世代記 1、持有者照留（2.1 沒記持有者的仍是空的，要先接手到 `RECONCILE`）。升級後 2.1 版工具不保證能讀。
+- 仍是 shadow：只提示、不擋其他工具；讀 db 和寫回條仍由總監用 `ArtifactData` 做，本工具不連網。
+
+## completion.py（2.3.0，N1）
 
 ```text
 python -I -X utf8 completion.py <完成度表.md|.json> [--previous 上週.json] [--save 本週.json] [--root DIR] [--strict]
@@ -185,8 +954,9 @@ python -I -X utf8 completion.py <完成度表.md|.json> [--previous 上週.json]
 - 表要有 ID 欄和分數欄（`ID / 編號`、`score / 分數`），可加 `item / 項目`、`evidence / 證據`、`critical / 關鍵`、`weight / 權重`、`visibility / 可見度`、`phase / 階段`、`decision / 決定`。分數只能是 0 / 25 / 50 / 75 / 100。
 - 100 要有證據路徑（存在、非空），沒有就算 75 並印 WARN：分數背後要有實際行為的紀錄。`visibility` 高的項目寫延後（after alpha、延後、later）要有 `decision`，否則 WARN。
 - `--previous` 多印 `prev` 和 `delta` 欄；`--save` 寫快照（schema `completion-v1`）。不是每輪必讀：被問進度或每週跑。
+- 2.4.0（L10）：可加 `depends_on / 依賴 / 前置` 欄（ID 用 `;`、`,` 或空白分開；JSON 用 list）。有任何一列填了，就多印 `depends_on` 欄、`READY_NOW:`（還沒到 100、依賴全部算 100 的項目；被壓成 75 的 100 不算完成）和每個卡住項目一行 `BLOCKED <ID> (<分數>): waits for ...`。依賴的 ID 不在表裡、或依賴繞成一圈，印 WARN（`--strict` 會 exit 1）。沒有這一欄的舊表，輸出和 2.3.0 一模一樣。概念來自 steveyegge/beads（MIT），沒有複製程式碼。
 
-### gate_check.py --feasibility（2.3.0，N2）
+## gate_check.py --feasibility（2.3.0，N2）
 
 ```text
 python -I -X utf8 gate_check.py --feasibility <可行性紀錄.md> [...]
@@ -194,12 +964,12 @@ python -I -X utf8 gate_check.py --feasibility <可行性紀錄.md> [...]
 
 - 開一組修正、或凍結一個 gate 的數字之前，先用 CPU 搜尋有沒有可行解。紀錄寫 `FEASIBILITY:`（給哪一組）、`FEASIBLE_COUNT:`（找到幾個解；0 就不開這組）、`SCRIPT:`、`RESULT:`（JSON 有 `feasible_count` 時要相符）；gate 的 `THRESHOLDS:` 每行寫來源（`source=video|mocap|spec|...`）。
 
-### 裁決的「自己查證的證據」（2.3.0）
+## 裁決的「自己查證的證據」（2.3.0）
 
 - `gate_check.py --verdict`：判定是 PASS / PASS_WITH_WARNINGS / CONDITIONAL_PASS，就要至少一行 `- `<指令>` exit=<n> at=<HH:MM>`（`ran_line.py` 印的格式）；只有範例佔位（`<…>`）不算。FAIL、HOLD 這類不需要。
 - 嚴重度：專案設定的 `"verdict_self_check"`。`"warn"`（2.3.x 預設）：缺這一行印 `~ WARN SELF_CHECK`，exit code 不變；`"fail"`：裁決 FAIL。設定從 `--config director_work.json` 讀，沒給就找裁決所在資料夾或上一層的 `director_work.json`；值不是 warn / fail 會印一行說明並用 warn。範例見 `director_work.example.json`。
 
-### sim_check.py（2.3.0，N3）
+## sim_check.py（2.3.0，N3）
 
 ```text
 python -I -X utf8 sim_check.py --patch-config patch.json --sim-config sim.json --measured last.json --sim-output out.json [--tol 0.05]
@@ -207,7 +977,7 @@ python -I -X utf8 sim_check.py --patch-config patch.json --sim-config sim.json -
 
 - patch 和模擬讀同一個具名設定最好（同一個檔直接通過）；不同檔就逐項比（巢狀用 `a.b` 名稱）。`--measured` 的每個數字要在模擬輸出的容差內；沒給 `--measured` 是 FAIL，除非 `--first-run`。不符就「先修模擬」，TR 等它。
 
-### waiver.py（2.3.0，N4）
+## waiver.py（2.3.0，N4）
 
 ```text
 python -I -X utf8 waiver.py add     --file WAIVERS.json --lane <線> --until "<解除它的事件>" [--watch <檔>] [--reason "<為什麼>"]
@@ -222,7 +992,7 @@ python -I -X utf8 waiver.py check   --file WAIVERS.json [--block-hours 8] [--wak
 - `block` 記錄卡在整合的分支；超過 `--block-hours` 印 `~ INTEGRATION_BLOCKED`：建議在預設關閉的開關後面先合進去，不要一直等。
 - 接法：閒置監看每次跑 `check --wake-only`，有 `WAKE` 行才叫醒那條線。最後一行 `WAIVERS: lanes= wake= blocked_long=`。
 
-### templates/run_closing.py（2.3.0，N5）
+## templates/run_closing.py（2.3.0，N5）
 
 ```text
 python -I -X utf8 run_closing.py run   --board <看板資料夾> --id <TR-ID> -- <指令> [參數 ...]
@@ -235,16 +1005,16 @@ python -I -X utf8 run_closing.py check --board <看板資料夾> --id <TR-ID> [-
 - `check`：印 `NONE / WAIT_ACK / NO_ACK / RUNNING / DONE / DONE_WITHOUT_ACK`；判 NO_ACK 前先看有沒有結果。
 - 範本用 `<id>.GO / .ACK / .DONE` 檔當訊號。接到專案只改 `signal()`（怎麼寫看板、送通知）和 `seen()`（怎麼讀）兩個函式。
 
-### dsh_doctor.py --licenses（2.3.0，N6；上游是 doctor.py）
+## doctor.py --licenses（2.3.0，N6）
 
 ```text
-python -I -X utf8 dsh_doctor.py --licenses <授權清單.json|.md> [--license-days 3] [--licenses-only]
+python -I -X utf8 doctor.py --licenses <授權清單.json|.md> [--license-days 3] [--licenses-only]
 ```
 
 - 清單：JSON（list 或 `{"licenses": [...]}`，每筆 `tool`、`license`、`expires`）或 Markdown 表（tool / license / expires 欄）。剩不到 `--license-days` 天印 WARN，寫明是哪個工具持有的，例如 `license expiring: trial (held by image-editor) expires …, 2 day(s) left: renew it now`；過期、日期寫錯另列。
-- 一般 dsh_doctor 執行把每一筆列成 `licenses` 檢查（快到期、過期、日期寫錯是 WARN）；`--licenses-only` 只查授權、不需要 git，最後一行 `LICENSES: ok= expiring= expired= bad=`，有問題 exit 1。
+- 一般 doctor 執行把問題列成 WARN；`--licenses-only` 只查授權、不需要 git，最後一行 `LICENSES: ok= expiring= expired= bad=`，有問題 exit 1。
 
-### line_brief.py（2.3.0，N7）
+## line_brief.py（2.3.0，N7）
 
 ```text
 python -I -X utf8 line_brief.py <線名> --config <status 設定.json>
@@ -253,7 +1023,7 @@ python -I -X utf8 line_brief.py <線名> [--board 看板] [--match 字串] [--re
 
 - 設定放在 status 設定的 `"lines"`（`templates/status_director.json` 有範例；`status_gen` 會忽略它）。印 BOARD（看板裡提到這條線的行）、GIT（`status -sb` 和最後一個 commit）、RESULT（最新結果檔和開頭幾行）、LOG（尾段），最後一行 `LINE_BRIEF: <線> board= git= result= log=`；設定了的部分讀不到 exit 1。要看某條線時跑，不是每輪必讀。
 
-### pre_tr.py（2.3.0，N8）
+## pre_tr.py（2.3.0，N8）
 
 ```text
 python -I -X utf8 pre_tr.py --config pre_tr.json (--git-diff <base> | --changed <檔> ... | --classes <類別> ...) [--strict] [--dry-run]
@@ -261,7 +1031,7 @@ python -I -X utf8 pre_tr.py --config pre_tr.json (--git-diff <base> | --changed 
 
 - 設定（schema `pre-tr-v1`，範例 `templates/pre_tr.json`）：每個缺陷類別寫 `paths`（glob）、`checks`（argv、可寫 `{python}`、`{repo}`）和 `why`。改到的類別每個檢查都要 exit 0；類別沒有檢查印 `MISSING`，也擋 TR。沒歸類的檔印 `~ UNCLASSIFIED`（`--strict` 時也擋）。最後一行 `PRE_TR: PASS|BLOCK classes= checks= failed= missing= unclassified=`。
 
-### pack_check.py（2.3.0，F1 + F5）
+## pack_check.py（2.3.0，F1 + F5）
 
 ```text
 python -I -X utf8 pack_check.py check  <審查包> [--leak-regex REGEX] [--min-part-fraction 0.02] [--margin 0]
@@ -271,7 +1041,7 @@ python -I -X utf8 pack_check.py readme <審查包> [--out README.md]
 - 審查包要有渲染腳本寫的 `manifest.json`（schema `review-pack-v1`：fps、sampled_frames、events、min_phase_frames、period_frames、images 每張的 camera / frame / subject_bbox / part / part_bbox、render、reference_render）。bbox 是渲染器投影出來的，不是從圖猜的。
 - 檢查：事件影格有抽到、最大間隔不超過最短階段的一半、均勻間隔不是動作週期的倍數；主體每格在畫面內（寬高讀 PNG 檔頭）；近景的部位在圖內且佔至少 2%；檔名不帶版本或結論字樣；manifest 和實際檔案一致；動態模糊、景深、非 100% 解析度、有損格式、和參考不同的設定都 FAIL；README 只能列包裡真的有的檔。
 
-### hash_check.py（2.3.0，F2 + F3 + F4）
+## hash_check.py（2.3.0，F2 + F3 + F4）
 
 ```text
 python -I -X utf8 hash_check.py compare --expected 基準.json --actual 這次.json [--allow-extra]
@@ -282,7 +1052,7 @@ python -I -X utf8 hash_check.py show    <組件或執行檔> ...
 
 - `compare`：基準有、這次沒有的案例是 `MISSING`，FAIL，不是略過；多出來的預設也 FAIL。`fresh`：重算來源和輸出的內容雜湊和 stamp 比，不看檔案時間（checkout、複製、解壓都會改時間）。`show` 印 `<絕對路徑> sha256= bytes=`，CPU 重現時印實際跑的那支。做法見 `templates/CPU_REPRO.md`。
 
-### flag_check.py（2.3.0，F6）
+## flag_check.py（2.3.0，F6）
 
 ```text
 python -I -X utf8 flag_check.py --flags 開關.json --log 執行.log [--before "<第二個 frame 的 log 樣式>"] [--first-lines 400]
@@ -290,11 +1060,36 @@ python -I -X utf8 flag_check.py --flags 開關.json --log 執行.log [--before "
 
 - 每個開關在第一個 frame 前要有一行 `flag <NAME> read = <VALUE>`。整數開關讀到 `1.0`、`true` 是 `TYPE`；值不同是 `WRONG`；太晚是 `LATE`；沒有是 `MISSING`。任何一項就 `FLAGS: STOP`：這次執行不判定。程式端寫法（整數解析、值不對就停）見 `templates/CPU_REPRO.md`。
 
-### round_check.py 的條件表（2.3.0）
+## round_check.py 的條件表（2.3.0）
 
 - 研究檔每一節要有一張「測試條件 vs 參考條件」表（表頭同時寫到 test / 測試 和 reference / 參考 / 基準，至少一列）；沒有印 `~ WARN NO_CONDITIONS_TABLE`（2.3.0 只警告）。
 
-### ruler_check.py（2.6.0-ds.6，上游 2.6.0 N1、N5）
+## selftest.py
+
+```text
+python -I -X utf8 selftest.py
+```
+
+改過任何工具、`vocabulary.json`、`docs/02`、範本或每輪必讀的文件就跑一次。也會檢查：文件和範本裡的固定用詞和 `vocabulary.json` 一致；README 標「每輪必讀」的文件合計不超過上限（`MUST_READ_LIMIT`，3.0.0 起為 8,192 bytes：四份必讀從 2.1.0 的 9,550 減到 8,173）；README＋BOOTSTRAP＋這四份合計不超過 24 KB（`memory_size_check.py --chain`，`test_chain_size_300`）。要提高上限，commit 訊息寫明原因。GitHub Actions 在每次 push 和 PR 跑同一支（`.github/workflows/selftest.yml`），另外在 PATH 上沒有 git 時再跑一次。
+
+- 變體版號（3.0.0 B16）：查基板版號和 CHANGELOG 的測試都經過 `upstream_300(root)`：有 `BASE_VERSION` 和 `CHANGELOG-upstream.md` 就讀這兩份（變體），否則讀 `VERSION`、`CHANGELOG.md`（基板）；待決頁用詞掃描也略過 `CHANGELOG-upstream.md`。所以變體不用為了自己的 `X.Y.Z-標籤.N` 版號覆寫整份 selftest（`test_upstream_300`）。
+- 沒有 git（2.1.0）：要建 git 測試資料的測試組整組略過，每組印一行 `SKIP <測試組>: needs git, none on PATH`；其餘照跑，有失敗照樣 exit 1。有 git 時這些測試組照常跑，建資料失敗仍是失敗。`test_no_git` 自己把 git 從 PATH 拿掉，確認 `evidence_record run` 仍寫紀錄、`--rerun` 是 NOT_RUN、doctor 說沒有 git。
+- 最後一行（2.2.4）：`selftest: 通過/總數 passed; skipped=N`。每一行 `SKIP`（沒有 git、沒有 bash、不能建 symlink、沒有 8.3 短檔名、GIT_DIR 太長）都算進 skipped，不算進 passed；exit 規則不變（有 FAIL 才 exit 1），所以有 SKIP 要看這一行。
+- 指令文字（2.5.0）：比對指令文字的測試用 `either_quoting(argv)`，POSIX 單引號（`shlex.join`）和 Windows 雙引號（`list2cmdline`）兩種都收，Windows 本機和 Linux CI 測的是同一件事（`test_quoting_either_250`，接續 2.3.0 `test_ran_line_posix_230`）。
+- 長路徑（2.2.4）：selftest 開頭給整個 process 設 `GIT_CONFIG_COUNT`／`core.longpaths=true`（原本有就接在後面），它叫起來的工具裡的 git 也吃得到；測試建的本機 origin 另外在 repo 裡設 `core.longpaths`。`test_submodule_ignore` 的 GIT_DIR 超過 220 字時印 `SKIP test_submodule_ignore: GIT_DIR <n> chars > 220 (git limit)`。
+
+### 已知限制（2.2.4，Windows 長路徑）
+
+- 路徑超過 260 字時 git 會報 `Filename too long`。工具不替你改設定，要自己跑一次 `git config --global core.longpaths true`。
+- GIT_DIR（`.git` 資料夾，或子模組在 `.git/modules/` 下的資料夾）超過約 220 字時，git 本身就停止（`'$GIT_DIR' too big`），`core.longpaths` 也沒用；只能把 repo 放在短一點的路徑。
+- 本機路徑當 remote（push、clone、fetch 到同一台電腦的另一個 repo）時，對方那一側的 git 不會繼承 `GIT_CONFIG_COUNT`／`GIT_CONFIG_PARAMETERS`（`git -c` 也一樣），要在對方 repo 裡設 `core.longpaths`，或用 `--global`。
+
+## 建議另外寫的（依專案）
+
+- **guard_check**：逐項檢查續航機制（計時器、排程、監看、壓縮設定、記憶大小）並印重建指令，對每個 worktree 跑 `round_check.py`，見 `docs/06b`。各專案機制不同，所以沒有通用版。
+- **排程看板工具**：有總管時，看板的讀寫（go / wait / ack / quiet / hold）用一支小工具統一，名稱檢查和 ACK 逾時警示寫在工具裡，見 `docs/02`。
+
+## ruler_check.py（2.6.0，N1、N5）
 
 ```text
 python -I -X utf8 ruler_check.py lines --pattern "cam=(.+?) overlap" --input run.log --real-line "<從 log 複製的一行>" [--expect-min 34]
@@ -304,7 +1099,7 @@ python -I -X utf8 ruler_check.py lines --pattern ",arrive" --input trace.csv --c
 
 量尺先證明看得到，才判產品。對到 0 筆、少於 `--expect-min`、`--real-line` 對不上、trace 截斷而需要的列不夠：INVALID（exit 1）。最後一行 `RULER: OK|INVALID matches=n files=n problems=n`。只讀。
 
-### run_plan_check.py（2.6.0-ds.6，上游 2.6.0 N2）
+## run_plan_check.py（2.6.0，N2）
 
 ```text
 python -I -X utf8 run_plan_check.py --plan PLAN.json --repo <工作樹> --commit <要跑的 commit>
@@ -313,25 +1108,8 @@ python -I -X utf8 run_plan_check.py --plan PLAN.json --log r1=run1.log r2=run2.l
 
 計畫檔（run-plan-v1）每場寫 `args`、每個開關的 `code`（`path:line`）、每個輸出項的 `code`。跑之前查程式位置在 commit 裡；跑完比對 log 的啟動參數。不符的場次 INVALID，不判。最後一行 `RUN_PLAN: OK|STOP runs=n problems=n`。只讀。
 
-### 2.6.0-ds.6 的選項（pre_tr、pack_check、waiver，上游 2.6.0 N3、N4、N6）
+## 2.6.0 的選項（pre_tr、pack_check、waiver）
 
-- `pre_tr.py` 設定的 `inputs`：`[{"path": "Library/x.json", "sha256": "...", "source": "從哪裡拿"}]`，路徑相對 `--repo`；缺了 `MISSING_INPUT`，雜湊不同 `INPUT_CHANGED`。最後一行結尾 `inputs_bad=n`。
+- `pre_tr.py` 設定的 `inputs`：`[{"path": "Library/x.json", "sha256": "...", "source": "從哪裡拿"}]`，路徑相對 `--repo`；缺了 `MISSING_INPUT`，雜湊不同 `INPUT_CHANGED`。
 - `pack_check.py`：重複內容 `~ DUPLICATE`，最後一行結尾 `unique=n`；manifest 的 `"required_segments": {"swing_t0_t8": [100, 101, 102]}` 沒有獨特圖就 FAIL。
-- `waiver.py snooze --file W.json --lane A B C --until "<事件>" --to 2026-11-27T00:00`：收尾時一次寫好全部線；`lift` 也可給多條線。
-
-## 限制
-
-- `dsh_audit.py` 的 input 經 `secret_mask` 後整條記下（2.2.5-ds.5 起）；加 `--input-limit N` 才截斷，截過的行標 `input_cut`。
-- 子代理 session 記在總監 session 的啟動資料夾下，`--project-dir <worker 的 repo>` 抓不到；用 `--session <agent>`。
-- `dsh_usage.py` 讀投影快取（寫入可能落後幾百筆事件或幾秒），`--from-jsonl` 可強制讀原始 log。
-- `dsh_audit.py` 需要 Node 22+（zstd）；`dsh_doctor.py` 會確認。
-- `dsh_guard.py` 只檢查指令文字，不是攔截器；真正擋檔案的是 DSH 沙箱，核准政策是 session 設定。
-- `report_vs_audit.py` 的 `UNVERIFIED` 要人看：工具只能說「可能在截斷處」，不能判斷有沒有跑。
-- 2.4.0-ds.6 的打轉、恢復、注入檢查都是事後或自己跑的：上游 2.4.0 的即時提醒、重開時自動接回、工具結果旁的警告，在 DSH 都沒有。
-- `loops` 的 `child_error_unhandled` 只看「最後一個呼叫是失敗的子代理呼叫」；子代理結束事件（`subagent-settled`）的失敗狀態本機紀錄還沒看過，不猜。
-
-### 已知限制（2.2.4-ds.4，Windows 長路徑，同上游 2.2.4）
-
-- 路徑超過 260 字時 git 會報 `Filename too long`。工具不替你改設定，要自己跑一次 `git config --global core.longpaths true`。`selftest_ds.py` 開頭給整個 process 設 `GIT_CONFIG_COUNT`／`GIT_CONFIG_KEY_n=core.longpaths`／`GIT_CONFIG_VALUE_n=true`（原本有 `GIT_CONFIG_COUNT` 就接在後面），它叫起來的工具裡的 git 也吃得到；只在 selftest 裡設，tools 不變。
-- GIT_DIR（`.git` 資料夾，或子模組在 `.git/modules/` 下的資料夾）超過約 220 字時，git 本身就停止（`'$GIT_DIR' too big`），`core.longpaths` 也沒用；只能把 repo 放在短一點的路徑。selftest_ds 沒有建子模組的測試，所以沒有這種 SKIP。
-- 本機路徑當 remote（push、clone、fetch 到同一台電腦的另一個 repo）時，對方那一側的 git 不會繼承 `GIT_CONFIG_COUNT`／`GIT_CONFIG_PARAMETERS`（`git -c` 也一樣），要在對方 repo 裡設 `core.longpaths`，或用 `--global`；selftest_ds 建的 bare origin 就是這樣設。
+- `waiver.py snooze --file W.json --lane A B C --until "weekly reset" --to 2026-11-27T00:00`：收尾時一次寫好全部線。

@@ -1,47 +1,71 @@
-"""Release this repository in one pass: fetch, compare with the remote branch, check VERSION / CHANGELOG / tag order,
-run the selftest, scan what is about to go public, then push the branch, tag it and create the GitHub Release.
+"""Release this repository in one pass (2.2.2, ported from the DeepSeek port's ds.3): fetch, compare with the remote
+branch, check VERSION / CHANGELOG / tag order, run the selftest, scan what is about to go public, then push the
+branch, tag it and create the GitHub Release.
 
   python -I -X utf8 tools/release.py [--repo DIR] [--merge] [--execute] [--config FILE] [--version X]
 
 Default is a dry run: it fetches (a fetch only updates remote-tracking refs) and runs every check, then prints the
 remote steps it would take. Nothing on the remote changes without --execute.
+A release is made from a commit, never the working tree: VERSION and CHANGELOG.md are read from HEAD
+(`git show HEAD:VERSION`), and a tracked file that is modified or staged stops every run, dry run too, with the next
+step to take (2.2.2: a VERSION edited but not committed used to pass the dry run).
 
 Steps, in order; each prints `STEP <name>: OK | FAIL | SKIP | PLAN ...`, and a FAIL stops with a `NEXT:` line:
   fetch      git fetch <remote> --tags (no --prune-tags: local tags are left alone)
+  worktree   no tracked file is modified or staged (untracked files are not released and do not count)
   state      HEAD against <remote>/<branch>: UP_TO_DATE, AHEAD n, BEHIND n or DIVERGED ahead n / behind n.
              BEHIND (nothing new to release) stops. DIVERGED stops unless --merge: then the dry run predicts conflicts
              with `git merge-tree`, and --execute makes branch release/<version> from <remote>/<branch>, merges HEAD
              into it with --no-ff and stops on a conflict, listing the conflicted files (resolve, commit, run again
              from that branch)
-  version    VERSION and CHANGELOG.md are read as committed at HEAD (git show HEAD:...), and an uncommitted
-             change to either stops (the tag goes on HEAD); VERSION equals the first `## ` heading of
-             CHANGELOG.md; tag v<version> is not on the remote yet, or
-             already points at HEAD (a rerun); <version> sorts above every remote tag of the same shape
-             (<major>.<minor>.<patch>[-<label>.<n>]) - 2.2.0-ds.2 after 2.2.1-ds.1 fails. 2.2.3-ds.3 (總監 ruling
-             WO-DS-005 C): the pair (upstream version, ds serial) as a whole is compared, so 2.2.3-ds.3 after
-             v2.2.2-ds.3 passes and 2.2.2-ds.2 / 2.2.2-ds.3 stop; the serial alone is no longer checked. No flag
-             skips this check.
-  worktree   no tracked file is modified or staged (dry run too: the release is made from HEAD)
-  selftest   the selftest command exits 0 (default `python -I -X utf8 tools/selftest_ds.py`)
-  scan       <remote>/<branch>..HEAD, everything that goes public: paths (DIRECTOR/, _work/, AGENTS.local.md, DSH
-             session files), added lines (secret formats from secret_mask.py, key = value secrets with a real-looking
-             value, email addresses other than noreply and *.invalid, <drive>:/Users/<name> paths; 2.2.2-ds.3 also upstream's
-             CLAUDE.local.md, .claude/settings.local.json and Claude session transcripts), commit messages and commit
-             author / committer emails. gitleaks runs too when it is on PATH (not required)
-  push       git push <remote> HEAD:refs/heads/<branch> (never --force), then ls-remote must equal HEAD
-  tag        git tag -a v<version> on HEAD, git push <remote> refs/tags/v<version> (one tag, never --tags), then
-             ls-remote must show the tag peeled to HEAD
+  version    VERSION at HEAD equals the first `## ` heading of CHANGELOG.md at HEAD; tag v<version> is not on the
+             remote yet, or already points at HEAD (a rerun); <version> sorts above every remote tag of the same shape
+             (<major>.<minor>.<patch>[-<label>.<n>]) - 2.2.0-x.2 after 2.2.1-x.1 fails. 3.0.0 (series plan 6.9-3):
+             the upstream version and the -<label>.<n> serial are compared as one pair. 3.0.0 B14 (SPEC 1-8): the
+             serial continues the previous version of the same label and never goes back to 1: after v2.2.1-x.2 only
+             -x.3 is accepted (2.2.2-x.3 or 2.2.1-x.3), 2.2.2-x.1 and 2.2.2-x.4 stop. The first tag of a label
+             takes any serial; a rerun (tag already at HEAD) is not checked again
+  readme     3.0.0 (PO 11-28): when HEAD tracks tools/readme_check.py (a DIRECTOR-WORK series repo), README.md of
+             HEAD has every section of the series (readme_check.py --rev HEAD: 所屬系列 for the base, all of SPEC
+             section 1-9 for a variant). Only exit 0 with the line `README_CHECK: PASS` passes: no exit code (it
+             could not start, it timed out), another exit code or no PASS line stops. Other repos: SKIP
+  selftest   the selftest command exits 0 (default `python -I -X utf8 tools/selftest.py`)
+  scan       <remote>/<branch>..HEAD, everything that goes public: paths (DIRECTOR/, CLAUDE.local.md,
+             .claude/settings.local.json, Claude session transcripts), added lines and commit messages (the rules and
+             the allow file of tools/privacy_scan.py, 3.0.0 B9: drive paths, user folders /Users/<name> \\Users\\<name>
+             /home/<name>, emails, token formats, code names, the owner's account name, private words; plus
+             key = value secrets with a real-looking value) and commit author / committer emails. A noreply or
+             *.invalid address is public by design only in commit messages (Co-Authored-By trailers) and author /
+             committer fields. gitleaks runs too when it is on PATH (not required)
+  privacy    3.0.0 (privacy ruling): tools/privacy_scan.py reads every file and path of HEAD, not only the change:
+             drive-letter paths, user folders, emails, token formats, the owner's other code names and account name,
+             words from privacy_banned.local.txt. An allowed hit needs an entry with its reason in
+             tools/privacy_allow.txt. Any hit, or an allow file it cannot read, stops before anything is pushed
+  delivery   3.0.0 B3 (C2 hard line, from cdx_release): when <director>/evidence/DELIVERY.json exists (default
+             DIRECTOR/ of the repo, --director or "director" in the config), `delivery.py check --delivered <the
+             checked commit>` must exit 0 with `DELIVERY_CHECK: PASS`: the commit about to be pushed is the delivered,
+             verified one (a commit made after the record is HEAD_MOVED). No exit code or no PASS line stops. No
+             record: SKIP (nothing binds this release to a delivery)
+  push       git push <remote> <checked commit>:refs/heads/<branch> (never --force), then ls-remote must equal it.
+             3.0.0 B3: the commit is the one HEAD was when the checks started (after the state step), never what HEAD
+             is at push time (a commit made during the selftest stops: HEAD moved during the checks); right before
+             the push ls-remote runs again and anything other than the remote the checks saw (or the commit itself,
+             a rerun) stops: the remote moved after verification
+  tag        git tag -a v<version> on the checked commit, git push <remote> refs/tags/v<version> (one tag, never
+             --tags), then ls-remote must show the tag peeled to it. 3.0.0 B3: with --execute, before the tag and again
+             before the release, ls-remote <branch> must still be the checked commit
   release    gh release create v<version> --verify-tag --latest, notes = the CHANGELOG section of <version>, title from
              the config; then gh release view must show the release
-  describe   (2.4.0-ds.6) the GitHub repository description names the new version: every version in it
-             (<major>.<minor>.<patch>[-<label>.<n>], with or without a leading v) becomes <version>, through
-             gh repo edit --description, then gh repo view must show it. A description with no version is left alone
-             (SKIP, with a NEXT-style note to add one by hand); one that already says <version> is SKIP
+  describe   3.0.0 B5 (from dshdw 2.4.0-ds.6): the GitHub repository description names the new version: every
+             version in it (<major>.<minor>.<patch>[-<label>.<n>], with or without a leading v) becomes <version>,
+             through gh repo edit --description, then gh repo view must show it. A description with no version is left
+             alone (SKIP: add one by hand); one that already says <version> is SKIP; no gh on this machine is SKIP
+             (put the version in the description by hand)
 A rerun after a failure skips what is already done (branch already at HEAD, tag already at HEAD, release present).
 
 Config: the optional "release" object of director_work.json (--config), keys remote, branch, title ({version} is
-filled in), tag_message, selftest (a command line), gh_repo (owner/name; default from the remote URL). Missing keys
-use the defaults above.
+filled in), tag_message, selftest (a command line), gh_repo (owner/name; default from the remote URL), director (3.0.0
+B3: the DIRECTOR folder, relative to the repo; default DIRECTOR). Missing keys use the defaults above.
 
 Ends with `RELEASE: DRY_RUN|DONE|FAIL ...`. Exit codes: 0 dry run clean or release done, 1 a step failed, 2 cannot run.
 Standard library plus git; gh only for the release step.
@@ -59,20 +83,17 @@ import sys
 import tempfile
 
 HERE = pathlib.Path(__file__).resolve().parent
-DEFAULTS = {"remote": "origin", "branch": "main", "title": "v{version} — dsh-DIRECTOR-WORKER",
-            "tag_message": "v{version}", "selftest": "python -I -X utf8 tools/selftest_ds.py", "gh_repo": None}
+README_TIMEOUT = 120  # seconds; readme_check reads two files, a hang is a FAIL, never a pass
+DELIVERY_TIMEOUT = 300  # seconds; delivery.py check hashes the delivered files, a hang is a FAIL, never a pass
+DEFAULTS = {"remote": "origin", "branch": "main", "title": "DIRECTOR-WORK {version}",
+            "tag_message": "DIRECTOR-WORK {version}", "selftest": "python -I -X utf8 tools/selftest.py", "gh_repo": None,
+            "director": "DIRECTOR"}
 VERSION_SHAPE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:-([A-Za-z]+)\.(\d+))?$")
 PRIVATE_PATHS = [(re.compile(r"(^|/)DIRECTOR/"), "a DIRECTOR/ file (project state, never public)"),
-                 (re.compile(r"(^|/)_work/"), "a _work/ file (scratch work, never public)"),
-                 (re.compile(r"(^|/)AGENTS\.local\.md$"), "AGENTS.local.md (local instructions)"),
-                 (re.compile(r"(^|/)\.dsh/|session\.v\d+\.jsonl|\.jsonl\.zstd$"), "a DSH session file"),
-                 # 2.2.2-ds.3: upstream 2.2.2's Claude local files too (this repository is also edited from Claude Code)
                  (re.compile(r"(^|/)CLAUDE\.local\.md$"), "CLAUDE.local.md (local instructions)"),
                  (re.compile(r"(^|/)\.claude/settings\.local\.json$"), ".claude/settings.local.json (local settings)"),
                  (re.compile(r"(^|/)\.claude/projects/|(^|/)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
                              r"\.jsonl$"), "a Claude session transcript")]
-EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
-USER_PATH = re.compile(r"(?i)\b[A-Z]:(?:[\\/]|\\\\)+Users(?:[\\/]|\\\\)+")
 REAL_VALUE = re.compile(r"^[A-Za-z0-9/+_=.-]{12,}$")
 
 
@@ -136,24 +157,31 @@ def load_config(path):
     return config
 
 
-def gh_repo_from_url(url):
-    m = re.search(r"github\.com[:/]+([^/\s]+)/([^/\s]+?)(?:\.git)?/?$", url or "")
-    return f"{m.group(1)}/{m.group(2)}" if m else None
-
-
 DESCRIBED_VERSION = re.compile(r"(?<![\w.])(v?)\d+\.\d+\.\d+(?:-[A-Za-z]+\.\d+)?(?![\w.])")
 
 
 def described(description, version):
     """The repository description with every version in it replaced by `version` (a leading v is kept), or None when
-    it holds no version (2.4.0-ds.6: the release also updates the version the description shows)."""
+    it holds no version (3.0.0 B5, from dshdw 2.4.0-ds.6)."""
     if not DESCRIBED_VERSION.search(description or ""):
         return None
     return DESCRIBED_VERSION.sub(lambda m: m.group(1) + version, description)
 
 
+def gh_repo_from_url(url):
+    m = re.search(r"github\.com[:/]+([^/\s]+)/([^/\s]+?)(?:\.git)?/?$", url or "")
+    return f"{m.group(1)}/{m.group(2)}" if m else None
+
+
 def secret_module():
     spec = importlib.util.spec_from_file_location("secret_mask", HERE / "secret_mask.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def privacy_module():
+    spec = importlib.util.spec_from_file_location("privacy_scan", HERE / "privacy_scan.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -165,12 +193,19 @@ def email_allowed(address):
         or domain == "invalid"
 
 
-def line_findings(text, secrets):
-    """What in one added line must not go public: [(kind, shown)]; a secret is never shown, only its kind."""
+def line_findings(text, secrets, privacy, rules, allows, trailer=False):
+    """What in one added line (or, trailer=True, one commit message line) must not go public: [(kind, shown)].
+    3.0.0 B9: the rules and allow entries of privacy_scan.py (one rule set; shown masked, a token only by its kind),
+    plus key = value secrets. In a commit message a noreply / *.invalid address is a trailer, public by design."""
     found = []
-    for kind, pattern in secrets.PATTERNS:
-        if pattern.search(text):
+    for rule, matched in privacy.line_hits(text, rules, allows):
+        if trailer and rule == "email" and email_allowed(matched):
+            continue
+        if rule == "token":
+            kind = next((k for k, p in secrets.PATTERNS if p.search(matched)), "token")
             found.append((kind, f"[{kind}]"))
+        else:
+            found.append((rule, privacy.mask(rule, matched)))
     for kind, pattern in secrets.KEEP_PREFIX:
         if kind != "assignment":
             continue
@@ -178,11 +213,6 @@ def line_findings(text, secrets):
             value = m.group(2).strip("\"'\\")
             if REAL_VALUE.match(value) and re.search(r"\d", value) and re.search(r"[A-Za-z]", value):
                 found.append(("secret_assignment", "[secret value]"))
-    for address in EMAIL.findall(text):
-        if not email_allowed(address):
-            found.append(("email", address))
-    for m in USER_PATH.finditer(text):
-        found.append(("user_path", text[m.start():m.end() + 20].strip()))
     return found
 
 
@@ -190,6 +220,12 @@ def scan(repo, base, head):
     """Problems in base..head, each `<where>: <what>`; and notes."""
     problems, notes = [], []
     secrets = secret_module()
+    privacy = privacy_module()
+    try:  # 3.0.0 B9: privacy_scan.py's rules and the allow file of the commit being released
+        rules, allows = privacy.rules_and_allows(repo, privacy.allow_text_of(repo, head))
+    except privacy.Invalid as error:
+        return [f"privacy rules cannot load: {error}"], notes, 0
+    email_rule = [("email", privacy.RULES["email"])]
     names = git(repo, "diff", "--name-only", "--no-renames", "--diff-filter=ACMR", f"{base}..{head}").splitlines()
     for name in names:
         for pattern, what in PRIVATE_PATHS:
@@ -206,18 +242,22 @@ def scan(repo, base, head):
             number = int(hunk.group(1))
             continue
         if raw.startswith("+") and not raw.startswith("+++"):
-            for kind, shown in line_findings(raw[1:], secrets):
+            text = raw[1:]
+            if current == privacy.ALLOW_PATH:  # as privacy_scan reads it: an entry's pattern is not a leak, its reason is read
+                text = text.rpartition(" | ")[2]
+            for kind, shown in line_findings(text, secrets, privacy, rules, allows):
                 problems.append(f"{current}:{number}: {kind} {shown}")
             number += 1
     log = git(repo, "log", "--format=%H%x1f%an <%ae>%x1f%cn <%ce>%x1f%B%x1e", f"{base}..{head}")
     for record in filter(None, (r.strip() for r in log.split("\x1e"))):
         sha, author, committer, body = (record.split("\x1f") + ["", "", ""])[:4]
         for who, value in (("author", author), ("committer", committer)):
-            for address in EMAIL.findall(value):
+            for _, address in privacy.line_hits(value, email_rule, allows):
                 if not email_allowed(address):
-                    problems.append(f"commit {sha[:10]} {who}: email {address}")
-        for kind, shown in line_findings(body, secrets):
-            problems.append(f"commit {sha[:10]} message: {kind} {shown}")
+                    problems.append(f"commit {sha[:10]} {who}: email {privacy.mask('email', address)}")
+        for line in body.splitlines():
+            for kind, shown in line_findings(line, secrets, privacy, rules, allows, trailer=True):
+                problems.append(f"commit {sha[:10]} message: {kind} {shown}")
     if shutil.which("gitleaks"):
         proc = run(["gitleaks", "detect", "--source", ".", "--no-banner", "--redact",
                     f"--log-opts={base}..{head}"], repo)
@@ -233,11 +273,18 @@ def scan(repo, base, head):
 
 
 class Release:
-    def __init__(self, repo, config, execute, merge, version):
+    def __init__(self, repo, config, execute, merge, version, director=None):
         self.repo, self.config, self.execute, self.merge, self.version = repo, config, execute, merge, version
         self.remote, self.branch = config["remote"], config["branch"]
         self.upstream = f"{self.remote}/{self.branch}"
         self.planned = []
+        self.director = pathlib.Path(director) if director else repo / config["director"]
+        self.target = self.verified_remote = None  # 3.0.0 B3: set by pin() right after the state step
+
+    def pin(self):
+        """3.0.0 B3: the commit every later check runs on, and the remote branch they were checked against."""
+        self.target = self.head()
+        self.verified_remote = git(self.repo, "rev-parse", self.upstream)
 
     def step(self, name, status, detail=""):
         print(f"STEP {name}: {status}" + (f" {detail}" if detail else ""))
@@ -306,17 +353,17 @@ class Release:
         self.step("state", "OK", f"{detail}; merged into {target} ({self.head()[:10]})")
         return "merged"
 
-    def head_text(self, name):
-        """A file as committed at HEAD (the tag goes on HEAD, so the version is read from there), or None."""
+    def at_head(self, name):
+        """A file's text as committed at HEAD (never the working tree), or None when HEAD has no such file."""
         proc = git(self.repo, "show", f"HEAD:{name}", check=False)
-        return proc.stdout.lstrip("﻿") if proc.returncode == 0 else None
+        return proc.stdout.lstrip("\ufeff") if proc.returncode == 0 else None
 
     def read_version(self):
         if self.version:
             return self.version
-        text = self.head_text("VERSION")
+        text = self.at_head("VERSION")
         if text is None:
-            raise Stop("no VERSION file at HEAD", "commit the version in VERSION or pass --version")
+            raise Stop("no VERSION file at HEAD", "write the version into VERSION and commit it, or pass --version")
         return text.strip()
 
     def check_version(self):
@@ -324,11 +371,11 @@ class Release:
         key = version_key(version)
         if not key:
             raise Stop(f"version {version!r} is not <major>.<minor>.<patch>[-<label>.<n>]", "fix VERSION")
-        changelog = self.head_text("CHANGELOG.md")
+        changelog = self.at_head("CHANGELOG.md")
         top, section = changelog_top(changelog) if changelog is not None else (None, "")
         if top != version:
-            raise Stop(f"VERSION is {version} but the first CHANGELOG.md heading is {top or 'missing'}",
-                       "put the new version's section on top of CHANGELOG.md (or fix VERSION)")
+            raise Stop(f"VERSION is {version} but the first CHANGELOG.md heading at HEAD is {top or 'missing'}",
+                       "put the new version's section on top of CHANGELOG.md (or fix VERSION) and commit it")
         if not section.strip():
             raise Stop(f"the CHANGELOG section of {version} is empty", "write the release notes")
         self.notes = section
@@ -353,9 +400,18 @@ class Release:
         if higher:
             raise Stop(f"{tag} does not sort above the remote tag(s) {', '.join(higher)}",
                        f"use a version above {higher[-1]} (for example bump the base version, not only the -label.n)")
-        # 2.2.3-ds.3 (總監 ruling, WO-DS-005 C): the whole (upstream version, -label.N) pair must sort above every
-        # remote tag (the check above) and the tag must be new; the -label.N serial is not compared on its own
-        # (2.2.2-ds.3 -> 2.2.3-ds.3 is allowed; DEEPSEEK-PORT.md section 10)
+        # 3.0.0 (series plan 6.9-3, the DeepSeek port's rule): the whole (upstream version, -label.N) pair must sort
+        # above every remote tag (the check above) and the tag must be new.
+        # 3.0.0 B14 (SPEC 1-8, PO 11-28): and the serial continues the previous tag of the same label, never back to 1
+        if key[4] and not self.tag_done:
+            same = sorted((name for name in remote_tags if name != tag and version_key(name)
+                           and version_key(name)[4] == key[4]), key=version_key)
+            if same and key[5] != version_key(same[-1])[5] + 1:
+                want = version_key(same[-1])[5] + 1
+                raise Stop(f"{tag}: the -{key[4]}.N serial continues the previous version {same[-1]}: the next one is "
+                           f"-{key[4]}.{want}, not -{key[4]}.{key[5]} (SPEC 1-8: the serial never goes back to 1 and "
+                           "skips no number)",
+                           f"set VERSION and the CHANGELOG top to {key[0]}.{key[1]}.{key[2]}-{key[4]}.{want} and commit")
         others = [name for name in remote_tags if not version_key(name)]
         self.step("version", "OK", f"{version} = CHANGELOG top; {tag} " + ("already at HEAD (rerun)" if self.tag_done
                   else "is new") + f"; above {len(remote_tags) - len(others) - (1 if self.tag_done else 0)} remote tag(s)"
@@ -363,18 +419,42 @@ class Release:
         return version
 
     def check_worktree(self):
-        """No tracked file may be modified or staged, in a dry run too: the release is made from HEAD, and VERSION /
-        CHANGELOG.md are read from HEAD. An uncommitted version bump would otherwise name a tag whose commit says
-        another version (found in the 2.2.2-ds.3 dry run). DW's release.py stops the same way."""
-        dirty = git(self.repo, "diff", "--name-only", "HEAD").splitlines()
-        if dirty:
-            listed = ", ".join(dirty[:5]) + (f" (+{len(dirty) - 5} more)" if len(dirty) > 5 else "")
-            bump = [name for name in dirty if name in ("VERSION", "CHANGELOG.md")]
-            committed = (self.head_text("VERSION") or "").strip() or "no VERSION"
-            raise Stop(f"{listed} differ(s) from HEAD (uncommitted)"
-                       + (f"; HEAD says {committed}, and the release is made from HEAD" if bump else ""),
-                       "commit them (or undo them), then run again; a release is made from a commit, not the working tree")
-        self.step("worktree", "OK", "clean (untracked files are not released)")
+        dirty = run(["git", "-c", "core.quotepath=false", "status", "--porcelain", "--untracked-files=no"], self.repo)
+        if dirty.returncode != 0:
+            raise RuntimeError(f"git status: {(dirty.stderr or dirty.stdout).strip()[:400]}")
+        names = [line[3:] for line in dirty.stdout.splitlines() if line.strip()]
+        if names:
+            said = ""
+            if "VERSION" in names and not self.version:
+                work = (self.repo / "VERSION").read_text(encoding="utf-8-sig").strip() if (self.repo / "VERSION").is_file() else "gone"
+                said = f"; VERSION in the working tree is {work}, at HEAD {(self.at_head('VERSION') or 'missing').strip()}"
+            raise Stop(f"tracked files are modified or staged: {', '.join(names[:5])}"
+                       + (f" and {len(names) - 5} more" if len(names) > 5 else "") + said,
+                       "git add and git commit them (or git restore them), then run release.py again; a release is made "
+                       "from HEAD, never the working tree")
+        self.step("worktree", "OK", "no tracked file modified or staged (untracked files are not released)")
+
+    def readme(self):
+        """3.0.0 (PO 11-28): a series README has every section; no exit code or no PASS line is FAIL."""
+        if git(self.repo, "cat-file", "-e", "HEAD:tools/readme_check.py", check=False).returncode != 0:
+            self.step("readme", "SKIP", "HEAD has no tools/readme_check.py: not a DIRECTOR-WORK series repo")
+            return
+        command = [sys.executable, "-I", "-X", "utf8", str(HERE / "readme_check.py"), "--repo", str(self.repo),
+                   "--rev", "HEAD"]
+        try:
+            proc = subprocess.run(command, cwd=str(self.repo), capture_output=True, text=True, encoding="utf-8",
+                                  errors="replace", timeout=README_TIMEOUT)
+            code, lines = proc.returncode, [l for l in (proc.stdout or "").splitlines() if l.strip()]
+        except (OSError, subprocess.TimeoutExpired) as error:
+            code, lines = None, [f"{type(error).__name__}: {error}"]
+        verdict = lines[-1] if lines else ""
+        if code != 0 or not verdict.startswith("README_CHECK: PASS"):
+            for line in lines[:-1][:40]:
+                print(f"  - {line}")
+            raise Stop(f"readme_check: exit {'none' if code is None else code}, {verdict or 'no README_CHECK line'}",
+                       "add the missing README sections (a section with nothing to say says 無; templates/"
+                       "VARIANT_README.md lists them), commit, run again")
+        self.step("readme", "OK", verdict)
 
     def selftest(self):
         command = shlex.split(self.config["selftest"], posix=os.name != "nt") if self.config["selftest"] else []
@@ -403,16 +483,67 @@ class Release:
                        "history: rewrite the unpushed commits), then run again")
         self.step("scan", "OK", f"{self.upstream}..HEAD: {files} changed file(s), commits, authors: nothing private")
 
+    def privacy(self):
+        """3.0.0 privacy ruling: the whole tree of HEAD (privacy_scan.py), not only base..HEAD; any hit stops."""
+        module = privacy_module()
+        try:
+            hits, files, binary = module.scan(self.repo, "HEAD")
+        except module.Invalid as error:
+            raise Stop(f"privacy_scan cannot run: {error}",
+                       "fix it (every entry of tools/privacy_allow.txt needs `<rule>: <regex> | <reason>`), commit, "
+                       "run again")
+        if hits:
+            for rule, name, number, shown in hits[:40]:
+                print(f"  - HIT {rule} {name}:{number} {shown}")
+            if len(hits) > 40:
+                print(f"  - ... and {len(hits) - 40} more")
+            raise Stop(f"privacy_scan: {len(hits)} hit(s) in the files of HEAD",
+                       "replace them (a workspace path is written <WS>); only a public name of this series or a test "
+                       "mail domain may get an allow entry with its reason in tools/privacy_allow.txt; commit, run again")
+        self.step("privacy", "OK", f"privacy_scan: {files} file(s) of HEAD, nothing private ({binary} binary skipped)")
+
+    def delivery(self):
+        """3.0.0 B3 (C2 hard line, from cdx_release): the commit about to be pushed is the delivered, verified one."""
+        record = self.director / "evidence" / "DELIVERY.json"
+        if not record.is_file():
+            self.step("delivery", "SKIP", f"no {self.director.name}/evidence/DELIVERY.json: no delivery record binds "
+                      "this release")
+            return
+        command = [sys.executable, "-I", "-X", "utf8", str(HERE / "delivery.py"), "check", "--director",
+                   str(self.director), "--repo", str(self.repo), "--delivered", self.target]
+        try:
+            proc = subprocess.run(command, cwd=str(self.repo), capture_output=True, text=True, encoding="utf-8",
+                                  errors="replace", timeout=DELIVERY_TIMEOUT)
+            code, lines = proc.returncode, [l for l in (proc.stdout or "").splitlines() if l.strip()]
+        except (OSError, subprocess.TimeoutExpired) as error:
+            code, lines = None, [f"{type(error).__name__}: {error}"]
+        verdict = lines[-1] if lines else ""
+        if code != 0 or not verdict.startswith("DELIVERY_CHECK: PASS"):
+            for line in lines[:-1][:40]:
+                print(f"  - {line}")
+            raise Stop(f"delivery check: exit {'none' if code is None else code}, {verdict or 'no DELIVERY_CHECK line'}",
+                       f"push only the delivered, verified commit: release from it, or verify {self.target[:12]} "
+                       "(gate verdict, delivery.py record, judgments) and run again")
+        self.step("delivery", "OK", f"{verdict}; {self.target[:12]} is the delivered commit")
+
     def push(self):
-        head = self.head()
+        head = self.target or self.head()
+        if self.head() != head:  # 3.0.0 B3: what the checks saw is what goes out
+            raise Stop(f"HEAD moved during the checks: it is {self.head()[:10]}, the checks ran on {head[:10]}",
+                       "run release.py again: the new commit has not been checked")
         remote_sha = self.remote_branch_sha()
+        if self.verified_remote and remote_sha not in (self.verified_remote, head):
+            raise Stop(f"the remote {self.branch} moved after verification: ls-remote is "
+                       f"{(remote_sha or 'nothing')[:10]}, the checks saw {self.verified_remote[:10]}",
+                       "run release.py again (it fetches, checks and scans the new range); never --force")
         if remote_sha == head:
             self.step("push", "SKIP", f"{self.remote} {self.branch} is already {head[:10]}")
             return
         if not self.execute:
-            self.planned.append(f"git push {self.remote} HEAD:refs/heads/{self.branch}  (fast-forward, no --force)")
+            self.planned.append(f"git push {self.remote} {head[:12]}:refs/heads/{self.branch}  (the checked commit, "
+                                f"HEAD; fast-forward, no --force)")
             return
-        proc = git(self.repo, "push", self.remote, f"HEAD:refs/heads/{self.branch}", check=False)
+        proc = git(self.repo, "push", self.remote, f"{head}:refs/heads/{self.branch}", check=False)
         if proc.returncode != 0:
             raise Stop(f"push rejected: {(proc.stderr or proc.stdout).strip()[-300:]}",
                        "someone pushed meanwhile: run release.py again (it fetches and compares again); never --force")
@@ -425,8 +556,15 @@ class Release:
         out = git(self.repo, "ls-remote", self.remote, f"refs/heads/{self.branch}")
         return out.split("\t")[0] if out else None
 
+    def still_target(self, before):
+        """3.0.0 B3 (from cdx_release): with --execute, the remote branch is still the checked commit."""
+        if self.execute and self.target and self.remote_branch_sha() != self.target:
+            raise Stop(f"the remote {self.branch} changed before the {before}: ls-remote is "
+                       f"{(self.remote_branch_sha() or 'nothing')[:10]}, not {self.target[:10]}",
+                       f"look at the remote by hand; tag and release only the checked commit")
+
     def tag_step(self, version):
-        head = self.head()
+        head = self.target or self.head()
         if self.tag_done:
             self.step("tag", "SKIP", f"{self.tag} is already on the remote at HEAD")
             return
@@ -436,7 +574,7 @@ class Release:
             return
         local = git(self.repo, "rev-parse", "-q", "--verify", f"refs/tags/{self.tag}^{{commit}}", check=False)
         if local.returncode == 0 and local.stdout.strip() != head:
-            raise Stop(f"a local tag {self.tag} points at {local.stdout.strip()[:10]}, not HEAD",
+            raise Stop(f"a local tag {self.tag} points at {local.stdout.strip()[:10]}, not the checked commit {head[:10]}",
                        f"look at it (git show {self.tag}); delete the local one only if it is a mistake")
         if local.returncode != 0:
             git(self.repo, "tag", "-a", self.tag, "-m", message, head)
@@ -488,17 +626,22 @@ class Release:
         self.step("release", "OK", f"{data.get('url')} (draft={data.get('isDraft')})")
 
     def describe_step(self, version):
-        """2.4.0-ds.6 (WO-DS-012 A.5): the repository description shows the released version."""
+        """3.0.0 B5 (from dshdw 2.4.0-ds.6): the repository description shows the released version."""
         repo_name = self.config["gh_repo"] or gh_repo_from_url(git(self.repo, "remote", "get-url", self.remote))
         gh = shutil.which("gh")
-        if not (repo_name and gh):
-            if not self.execute:
+        if not gh:  # the Director's decision: no gh here is SKIP, never a stop after the release
+            if self.execute:
+                self.step("describe", "SKIP", f"gh is not on PATH; put {version} in the repository description by hand")
+            else:
                 self.planned.append(f"gh repo edit {repo_name or '<owner/name>'} --description <version -> {version}>"
-                                    + ("" if gh else "  (gh is not on PATH: --execute will stop here)"))
+                                    "  (gh is not on PATH: SKIP, by hand)")
+            return
+        if not repo_name:
+            if not self.execute:
+                self.planned.append(f"gh repo edit <owner/name> --description <version -> {version}>")
                 return
-            raise Stop("cannot update the repository description: " + ("gh is not on PATH" if repo_name else
-                       "cannot tell the GitHub repository from the remote URL"),
-                       f"put {version} in the description by hand (GitHub repository page, About)")
+            raise Stop("cannot update the repository description: cannot tell the GitHub repository from the remote URL",
+                       f"set \"release\": {{\"gh_repo\": ...}}, or put {version} in the description by hand")
         view = run([gh, "repo", "view", repo_name, "--json", "description"], self.repo)
         if view.returncode != 0:
             raise Stop(f"gh repo view failed: {(view.stderr or view.stdout).strip()[-300:]}",
@@ -541,13 +684,15 @@ def use_work_temp():
 
 def main(argv=None):
     use_work_temp()
-    sys.stdout.reconfigure(encoding="utf-8")  # before parse_args: --help prints during parsing
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--repo", default=".", help="the repository to release (default: current folder)")
     ap.add_argument("--config", help="director_work.json with an optional \"release\" object")
     ap.add_argument("--version", help="the version to release (default: the VERSION file)")
     ap.add_argument("--merge", action="store_true", help="when HEAD and the remote branch diverged, merge into release/<version>")
     ap.add_argument("--execute", action="store_true", help="change the remote (default: dry run)")
+    ap.add_argument("--director", help="the DIRECTOR folder whose evidence/DELIVERY.json binds the release "
+                                       "(default: <repo>/DIRECTOR, or \"director\" in the config)")
+    sys.stdout.reconfigure(encoding="utf-8")  # before parse_args: --help has non-ASCII text (test_help_any_console_230)
     a = ap.parse_args(argv)
     repo = pathlib.Path(a.repo).resolve()
     try:
@@ -558,16 +703,20 @@ def main(argv=None):
     if run(["git", "rev-parse", "--git-dir"], repo).returncode != 0:
         print(f"RELEASE: NOT_RUN {repo} is not a git repository")
         return 2
-    job = Release(repo, config, a.execute, a.merge, a.version)
+    job = Release(repo, config, a.execute, a.merge, a.version, a.director)
     mode = "EXECUTE" if a.execute else "DRY_RUN"
     print(f"RELEASE {mode} repo={repo} remote={job.remote} branch={job.branch}")
     try:
         job.fetch()
         job.check_worktree()
         state = job.state()
+        job.pin()
         version = job.check_version()
+        job.readme()
         job.selftest()
         job.scan()
+        job.privacy()
+        job.delivery()
         if state == "diverged" and not a.execute:
             job.planned.insert(0, f"git switch -c release/{version} {job.upstream}; git merge --no-ff <current branch>")
             job.planned.append(f"git push {job.remote} HEAD:refs/heads/{job.branch}  (the merge, fast-forward)")
@@ -576,7 +725,9 @@ def main(argv=None):
             job.planned.append(f"gh repo edit --description <version -> {version}>")
         else:
             job.push()
+            job.still_target("tag")
             job.tag_step(version)
+            job.still_target("release")
             job.release_step(version)
             job.describe_step(version)
     except Stop as stop:

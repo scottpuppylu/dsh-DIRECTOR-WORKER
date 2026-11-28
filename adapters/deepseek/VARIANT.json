@@ -1,0 +1,5 @@
+{
+  "default_strength": "light",
+  "rules_section": "adapters/deepseek/AGENTS_PROJECT_SECTION.md",
+  "_why": "SPEC_VARIANTS_300 dsh: default strength light, hard lines always on (base B15); the DW section DSH loads from the project AGENTS.md on every turn counts in the 24 KB chain (base B19)"
+}

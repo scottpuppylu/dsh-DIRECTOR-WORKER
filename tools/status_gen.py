@@ -9,38 +9,39 @@ longest path, or else of the line, becomes "…", so the status word at the end 
   GIT      branch, upstream ahead / behind, changed-file count and the last commits of the --git worktree
   OUT      the newest --output-count files under each output folder, with size and age
 
-Director sections (any of them, all optional):
-  PO       counts in the PO pending list (PO_PENDING.md): per "counts" item a regex (lines that match) or, for a JSON
-           file, a "list" (dotted key; "extract" = a regex whose group 1 is the JSON inside an HTML page) counted
-           where "field" == "value"; the list also gets a "PO hint" line for items still STATUS open with an ANSWER
-           filled in (2.1.0 shadow), and `~ PENDING_METHOD_MISSING` when DIRECTOR_STATE.md (beside the list, or
-           "state") has no PENDING_METHOD line: in dshdw the Director (the root session) asks the PO with
-           ask_user_question and keeps PO_PENDING.md; a worker reaches the PO only through 「總監」 (ask_user_question
-           is refused to a delegated subagent: DELEGATED_CALLER); there is no web page (2.2.0 shadow: the exit code
-           does not change)
+Director sections (any of them, all optional; "Director" status in docs/06b):
+  PO       counts on the PO page: per "counts" item a regex (lines that match) or, for a JSON page, a "list" (dotted
+           key; "extract" = a regex whose group 1 is the JSON inside an HTML page) counted where "field" == "value";
+           a text page also gets a "PO hint" line for items still STATUS open with an ANSWER filled in (2.1.0 shadow);
+           `~ PO_PAGE_MISSING` when DIRECTOR_STATE.md (beside the page, or "state") has no PO_PAGE_URL line: the PO
+           page was not published and pinned (BOOTSTRAP step 6). 2.2.0 shadow: the exit code does not change
   ORDERS   order files (glob, default WO-*.md) in "dir" without a "closed" match: the open ones, newest first
-  AUDIT    per action log (audit_log.py) of "globs": lines, blocked (deny / pause) and log reads (the built-in
-           log-read rules of L-041) in the last "hours" (default 1), and how many sessions
-  LOOPS    (2.3.0-ds.6) the JSON that `dsh_audit.py loops --out FILE` wrote: one line with the finding counts per
-           category (2.4.0-ds.6: the categories with findings, and NOT_VERIFIED ones) and the file's age, only when
-           it has findings (none: no line); a missing or unreadable file is
-           MISSING. Findings do not change the exit code. Refresh the file with dsh_audit.py loops at a checkpoint
+  SENDS    lines of the pending-sends file that match "unsent" (default an unticked "- [ ]"); a folder: its files
+  AUDIT    per action log (audit_log.py) of "globs": lines, blocked (hook_guard deny / pause) and log reads (the
+           poll_hint.py rules) in the last "hours" (default 1), and how many sessions
+  PROC     per "processes" item: whether a process whose command line matches "match" runs (NOT RUNNING exits 1)
+  LOOPS    (3.0.0 B10, from agy 2.3.0-ds.6) the JSON file of `loop_guard.py scan --out FILE` (or --json): one line with
+           the file's age, findings=<n>, the count per category that has findings, the categories the input cannot
+           check (bad_args=NOT_CHECKED, child_error_unhandled=NOT_VERIFIED), events and streams; NO_DATA when the scan
+           read no tool call. agy_audit.py loops --out (findings_total / counts) is read too. A missing or unreadable
+           file is MISSING; findings do not change the exit code. Refresh the file at a checkpoint
 
-  {"po_pending": {"path": "PO_PENDING.md", "counts": [{"label": "pending open", "regex": "..."},
+  {"po_page": {"path": "PO_PENDING.md", "counts": [{"label": "answered", "regex": "..."},
      {"label": "notes new", "list": "notes", "field": "status", "value": "new"}]},
    "orders": {"dir": "orders", "glob": "WO-*.md", "closed": "...", "show": 8},
-   "audit": {"globs": ["audit/*.jsonl"], "hours": 1},
+   "pending_sends": {"path": "PENDING_SENDS.md", "unsent": "..."},
+   "audit": {"globs": ["audit/*.jsonl"], "hours": 1}, "processes": [{"label": "idle_watch", "match": "idle_watch"}],
    "loops": {"path": "loops.json"}}
 
 templates/status_director.json is a Director config to copy.
 
-A missing path prints MISSING; a missing path, a disk below the threshold or an unreadable PO pending list makes
-status.py exit 1.
+A missing path prints MISSING; a missing path, a disk below the threshold, an unreadable PO page or a process that does
+not run makes status.py exit 1.
 
 Settings come from --config FILE (JSON, below) and/or the flags; a flag replaces the config's value.
 
   {"schema_version": 1, "name": "line-a", "logs": ["run/out.log"], "log_lines": 8, "hash_files": ["run/hashes.txt"],
-   "checksum": ["build/app.zip"], "outputs": ["run/frames"], "output_count": 5, "disk": "D:/", "disk_min_gib": 20,
+   "checksum": ["build/app.zip"], "outputs": ["run/frames"], "output_count": 5, "disk": "<WS>", "disk_min_gib": 20,
    "git": ".", "max_lines": 60, "width": 160}
 
 Relative paths are resolved against the config file's folder (flags: the current folder) and written into status.py
@@ -55,13 +56,15 @@ import sys
 
 KEYS = {"name": str, "logs": list, "log_lines": int, "hash_files": list, "checksum": list, "outputs": list,
         "output_count": int, "disk": str, "disk_min_gib": (int, float), "git": str, "max_lines": int, "width": int,
-        "po_pending": dict, "orders": dict, "audit": dict, "loops": dict,  # 2.3.0-ds.6: loops
+        "po_page": dict, "orders": dict, "pending_sends": dict, "audit": dict, "processes": list, "loops": dict,
         "lines": dict}  # 2.3.0: "lines" is read by line_brief.py; status.py ignores it
 DEFAULTS = {"name": "status", "logs": [], "log_lines": 8, "hash_files": [], "checksum": [], "outputs": [],
             "output_count": 5, "disk": None, "disk_min_gib": None, "git": None, "max_lines": 60, "width": 160,
-            "po_pending": None, "orders": None, "audit": None, "loops": None, "lines": None}
-DIRECTOR_KEYS = ("po_pending", "orders", "audit", "loops")
+            "po_page": None, "orders": None, "pending_sends": None, "audit": None, "processes": [], "loops": None,
+            "lines": None}
+DIRECTOR_KEYS = ("po_page", "orders", "pending_sends", "audit", "processes", "loops")  # 3.0.0 B10: loops
 CLOSED = r"(?im)^\s*(?:STATUS|狀態)\s*[:=：]\s*(?:CLOSED|DONE|ACCEPTED|結案)"
+UNSENT = r"^\s*[-*] \[ \]"
 PATH_KEYS = ("logs", "hash_files", "checksum", "outputs")
 
 TEMPLATE = r'''"""status.py for {name}: generated by DIRECTOR-WORK tools/status_gen.py; only reads. Regenerate instead of editing."""
@@ -219,34 +222,6 @@ if __name__ == "__main__":
 
 
 DIRECTOR_CODE = r"""
-READERS = re.compile(r"(?:^|[\s;|&(])(tail|get-content|gc|cat|type|head|less|more)(?=\s)", re.I)
-ALWAYS = ("tail", "get-content", "gc")  # these count on any file; the others only on log-like files
-LOG_LIKE = re.compile(r"\.(log|out|err|txt)$", re.I)
-SEPARATORS = re.compile(r"\s*(?:\|\||&&|[;|&])\s*")
-
-
-def read_targets(command):
-    # the files a command reads with a reader verb, lower-cased with forward slashes
-    targets = set()
-    for part in SEPARATORS.split(command or ""):
-        m = READERS.search(" " + part)
-        if not m:
-            continue
-        verb = m.group(1).lower()
-        rest = (" " + part)[m.end():]
-        try:
-            words = shlex.split(rest, posix=False)  # posix=True would eat the backslashes of Windows paths
-        except ValueError:
-            words = rest.split()
-        for w in words:
-            w = w.strip("'\"")
-            if not w or w.startswith("-") or w.isdigit() or w in ("<", ">", "2>&1"):
-                continue
-            if verb in ALWAYS or LOG_LIKE.search(w):
-                targets.add(w.replace("\\", "/").lower())
-    return targets
-
-
 def read_text(path):
     with open(path, encoding="utf-8-sig", errors="replace") as fh:
         return fh.read()
@@ -319,9 +294,24 @@ def recent(path, cutoff):
     return out
 
 
+def command_lines():
+    if os.name == "nt":
+        args = ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                "Get-CimInstance Win32_Process | ForEach-Object { $_.CommandLine }"]
+    else:
+        args = ["ps", "-eo", "args"]
+    try:
+        done = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if done.returncode:
+        return None
+    return [x for x in done.stdout.splitlines() if x.strip() and "Win32_Process" not in x and "ps -eo args" not in x]
+
+
 def director():
     global problems
-    page = CONFIG["po_pending"]
+    page = CONFIG["po_page"]
     if page:
         if not os.path.isfile(page["path"]):
             missing("PO", page["path"])
@@ -340,15 +330,11 @@ def director():
                           and re.search(r"(?im)^[ \t]*ANSWER[ \t]*:[ \t]*[^\s<]", m.group(2))]
                 if filled:
                     say(f"PO hint: {len(filled)} item(s) still STATUS open with an ANSWER filled in "
-                        f"({', '.join(filled[:5])}); read them in the pending list, the counts above may miss them")
-        # dshdw: there is no PO web page (2.2.0 shadow): the Director (root session) asks the PO with
-        # ask_user_question, workers go through 「總監」 (DELEGATED_CALLER), and the pending list is PO_PENDING.md.
-        # Say so when DIRECTOR_STATE.md names no PENDING_METHOD; never fail on it.
+                        f"({', '.join(filled[:5])}); read them on the page, the counts above may miss them")
+        # 2.2.0 shadow: a project set up before 2.2.0 has no PO page link in DIRECTOR_STATE.md; say so, never fail
         state = page.get("state") or os.path.join(os.path.dirname(page["path"]), "DIRECTOR_STATE.md")
-        if not (os.path.isfile(state) and re.search(r"(?m)^[ \t]*PENDING_METHOD[ \t]*:", read_text(state))):
-            say(f"~ PENDING_METHOD_MISSING: {state} has no PENDING_METHOD line; the Director asks the PO with "
-                f"ask_user_question and workers go through 總監 (dshdw, no web page), so write that down in "
-                f"DIRECTOR_STATE.md")
+        if not (os.path.isfile(state) and re.search(r"(?m)^PO_PAGE_URL[ \t]*:", read_text(state))):
+            say(f"~ PO_PAGE_MISSING: {state} has no PO_PAGE_URL line; publish and pin the PO page (BOOTSTRAP step 6)")
     orders = CONFIG["orders"]
     if orders:
         if not os.path.isdir(orders["dir"]):
@@ -363,6 +349,21 @@ def director():
                 say(f"  {os.path.basename(f)} (modified {age(f)} ago)")
             if len(still) > orders["show"]:
                 say(f"  ... {len(still) - orders['show']} more")
+    sends = CONFIG["pending_sends"]
+    if sends:
+        path = sends["path"]
+        if os.path.isdir(path):
+            names = sorted(n for n in os.listdir(path) if os.path.isfile(os.path.join(path, n)) and not n.startswith("."))
+            say(f"SENDS {path}: {len(names)} not sent" + ("" if names else " (nothing waiting)"))
+            for n in names[:3]:
+                say("  " + n)
+        elif os.path.isfile(path):
+            lines = [x.strip() for x in read_text(path).splitlines() if re.search(sends["unsent"], x)]
+            say(f"SENDS {path}: {len(lines)} not sent" + ("" if lines else " (nothing waiting)"))
+            for x in lines[:3]:
+                say("  " + x)
+        else:
+            missing("SENDS", path)
     audit = CONFIG["audit"]
     if audit:
         paths = sorted({p for g in audit["globs"] for p in glob.glob(g) if os.path.isfile(p)})
@@ -378,25 +379,59 @@ def director():
             sessions = len({e.get("session_id") for e in entries})
             say(f"AUDIT {os.path.basename(path)} last {audit['hours']:g}h: lines={len(entries)} blocked={blocked} "
                 f"log_reads={reads} sessions={sessions}")
-    loops = CONFIG["loops"]
-    if loops:  # 2.3.0-ds.6: dsh_audit.py loops --out FILE; a line only when it found something
+    if CONFIG["processes"]:
+        listing = command_lines()
+        for proc in CONFIG["processes"]:
+            if listing is None:
+                problems += 1
+                say(f"PROC {proc['label']}: cannot list processes")
+                continue
+            hits = [x for x in listing if re.search(proc["match"], x, re.I)]
+            problems += not hits
+            say(f"PROC {proc['label']}: " + (f"running ({len(hits)})" if hits else "NOT RUNNING"))
+    loops = CONFIG.get("loops")
+    if loops:  # 3.0.0 B10: loop_guard.py scan --out / --json (agy_audit.py loops --out too)
         try:
             data = json.loads(read_text(loops["path"]))
-            total, counts = int(data["findings_total"]), dict(data["counts"])
-        except (OSError, ValueError, KeyError, TypeError) as e:
+            if "findings_total" in data:  # agy_audit.py loops --out
+                total, counts = int(data["findings_total"]), dict(data["counts"])
+                flagged = [f"{k}=NOT_VERIFIED" for k in data.get("not_verified") or []]
+                where = f"sessions={data.get('sessions')}"
+            else:  # loop_guard.py scan
+                counts = {}
+                for hit in data["findings"]:
+                    counts[hit["category"]] = counts.get(hit["category"], 0) + 1
+                total = len(data["findings"])
+                cover = data["coverage"]
+                flagged = ([] if cover.get("error_text") else ["bad_args=NOT_CHECKED"]) \
+                    + ([] if cover.get("child_results") else ["child_error_unhandled=NOT_VERIFIED"])
+                where = f"events={int(data['events'])} streams={int(data['streams'])}"
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
             missing("LOOPS", f"{loops['path']} ({type(e).__name__})")
         else:
-            if total:
-                say(f"LOOPS {os.path.basename(loops['path'])} (modified {age(loops['path'])} ago): findings={total} "
-                    + " ".join(f"{k}={v}" for k, v in counts.items() if v)  # 2.4.0-ds.6: non-zero only (width)
-                    + "".join(f" {k}=NOT_VERIFIED" for k in data.get("not_verified") or [])
-                    + f"; sessions={data.get('sessions')}; lines: dsh_audit.py loops")
+            head = f"LOOPS {os.path.basename(loops['path'])} (modified {age(loops['path'])} ago)"
+            if data.get("no_data"):
+                say(f"{head}: NO_DATA (the scan read no tool call; not a measured 0)")
+            else:
+                say(f"{head}: findings={total}" + "".join(f" {k}={v}" for k, v in counts.items() if v)
+                    + "".join(" " + f for f in flagged) + f"; {where}"
+                    + ("; details: loop_guard.py scan" if total else ""))
 """
 
 
 def director_code():
-    """The status.py functions of the Director sections, with the log-read rules (L-041) inlined above them."""
-    return DIRECTOR_CODE
+    """The status.py functions of the Director sections, with poll_hint.py's log-read rules copied in as they are."""
+    source = pathlib.Path(__file__).with_name("poll_hint.py").read_text(encoding="utf-8")
+    parts = []
+    for name in ("READERS", "ALWAYS", "LOG_LIKE", "SEPARATORS"):
+        found = re.search(rf"^{name} = .*$", source, re.M)
+        if not found:
+            raise ValueError(f"poll_hint.py has no {name}")
+        parts.append(found.group())
+    found = re.search(r"^def read_targets.*?(?=^\S)", source, re.M | re.S)
+    if not found:
+        raise ValueError("poll_hint.py has no read_targets")
+    return "\n".join(parts) + "\n\n\n" + found.group().rstrip() + "\n\n" + DIRECTOR_CODE
 
 
 def director_settings(conf, base):
@@ -423,29 +458,29 @@ def director_settings(conf, base):
         # WinError 123 when resolve() meets a wildcard (seen on the GitHub runner, not on a newer 3.9 build).
         return os.path.abspath(os.path.join(str(base), value))
 
-    page = conf["po_pending"]
+    page = conf["po_page"]
     if page is not None:
-        only(page, "po_pending", ("path", "counts", "extract", "state"))
-        page["path"] = absolute(text(page.get("path"), "po_pending.path"))
+        only(page, "po_page", ("path", "counts", "extract", "state"))
+        page["path"] = absolute(text(page.get("path"), "po_page.path"))
         if page.get("state") is not None:
-            page["state"] = absolute(text(page["state"], "po_pending.state"))
+            page["state"] = absolute(text(page["state"], "po_page.state"))
         if page.get("extract") is not None:
-            regex(page["extract"], "po_pending.extract")
+            regex(page["extract"], "po_page.extract")
         counts = page.get("counts")
         if not isinstance(counts, list) or not counts or not all(isinstance(c, dict) for c in counts):
-            raise ValueError("po_pending.counts: a list of {label, regex} or {label, list, field, value}")
+            raise ValueError("po_page.counts: a list of {label, regex} or {label, list, field, value}")
         for c in counts:
-            only(c, "po_pending.counts", ("label", "regex", "list", "field", "value"))
-            text(c.get("label"), "po_pending.counts.label")
+            only(c, "po_page.counts", ("label", "regex", "list", "field", "value"))
+            text(c.get("label"), "po_page.counts.label")
             if (c.get("regex") is None) == (c.get("list") is None):
-                raise ValueError(f"po_pending.counts {c.get('label')}: give regex or list, one of them")
+                raise ValueError(f"po_page.counts {c.get('label')}: give regex or list, one of them")
             if c.get("regex") is not None:
-                regex(c["regex"], "po_pending.counts.regex")
+                regex(c["regex"], "po_page.counts.regex")
             else:
-                text(c["list"], "po_pending.counts.list")
+                text(c["list"], "po_page.counts.list")
                 for key in ("field", "value"):
                     if c.get(key) is not None:
-                        text(c[key], f"po_pending.counts.{key}", empty=True)
+                        text(c[key], f"po_page.counts.{key}", empty=True)
     orders = conf["orders"]
     if orders is not None:
         only(orders, "orders", ("dir", "glob", "closed", "show"))
@@ -455,6 +490,11 @@ def director_settings(conf, base):
         orders.setdefault("show", 8)
         if not isinstance(orders["show"], int) or isinstance(orders["show"], bool) or orders["show"] < 0:
             raise ValueError("orders.show: 0 or more")
+    sends = conf["pending_sends"]
+    if sends is not None:
+        only(sends, "pending_sends", ("path", "unsent"))
+        sends["path"] = absolute(text(sends.get("path"), "pending_sends.path"))
+        sends["unsent"] = regex(sends.get("unsent", UNSENT), "pending_sends.unsent")
     audit = conf["audit"]
     if audit is not None:
         only(audit, "audit", ("globs", "hours"))
@@ -468,9 +508,15 @@ def director_settings(conf, base):
         if not isinstance(audit["hours"], (int, float)) or isinstance(audit["hours"], bool) or audit["hours"] <= 0:
             raise ValueError("audit.hours: more than 0")
     loops = conf["loops"]
-    if loops is not None:
+    if loops is not None:  # 3.0.0 B10
         only(loops, "loops", ("path",))
         loops["path"] = absolute(text(loops.get("path"), "loops.path"))
+    for proc in conf["processes"]:
+        if not isinstance(proc, dict):
+            raise ValueError("processes: a list of {label, match}")
+        only(proc, "processes", ("label", "match"))
+        text(proc.get("label"), "processes.label")
+        regex(proc.get("match"), "processes.match")
 
 
 def load_config(path):
@@ -505,7 +551,7 @@ def settings(a):
             continue
         if not isinstance(value, kind) or isinstance(value, bool):
             raise ValueError(f"{key}: wrong type")
-        if kind is list and not all(isinstance(x, str) and x for x in value):
+        if kind is list and key != "processes" and not all(isinstance(x, str) and x for x in value):
             raise ValueError(f"{key}: a list of paths")
     for key in PATH_KEYS:
         conf[key] = [str((base / p).resolve()) for p in conf[key]]
@@ -526,7 +572,6 @@ def settings(a):
 
 
 def main(argv=None):
-    sys.stdout.reconfigure(encoding="utf-8")  # before parse_args: --help prints during parsing
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--out", required=True, help="the status.py to write")
     ap.add_argument("--force", action="store_true", help="replace an existing --out file")
@@ -538,12 +583,13 @@ def main(argv=None):
     ap.add_argument("--checksum", action="append", default=[], metavar="FILE")
     ap.add_argument("--outputs", action="append", default=[], metavar="DIR")
     ap.add_argument("--output-count", type=int)
-    ap.add_argument("--disk", metavar="PATH", help="a path on the drive to measure, e.g. D:/")
+    ap.add_argument("--disk", metavar="PATH", help="a path on the drive to measure, e.g. <WS>")
     ap.add_argument("--disk-min-gib", type=float)
     ap.add_argument("--git", metavar="DIR")
     ap.add_argument("--max-lines", type=int)
     ap.add_argument("--width", type=int)
     a = ap.parse_args(argv)
+    sys.stdout.reconfigure(encoding="utf-8")
     try:
         conf = settings(a)
     except (OSError, ValueError) as e:

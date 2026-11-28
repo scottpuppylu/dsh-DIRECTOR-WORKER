@@ -1,7 +1,0 @@
-{"createdAt": 1700000000000, "cwd": "X:/fixture", "id": "session-fx-child_error_neg", "seq": 0, "time": 1700000000000, "type": "session"}
-{"data": {"arguments": {"path": "docs/plan.md"}, "name": "read", "subCallId": "s1"}, "seq": 1, "time": 1700000001000, "type": "tool/ptc-dispatch-start"}
-{"data": {"arguments": {"path": "docs/plan.md"}, "content": [{"text": "# Plan", "type": "text"}], "isError": false, "name": "read", "subCallId": "s1"}, "seq": 2, "time": 1700000002000, "type": "tool/ptc-dispatch"}
-{"data": {"arguments": "{\"name\": \"w1\", \"task\": \"check the plan\"}", "callId": "c3", "name": "subagent"}, "seq": 3, "time": 1700000003000, "type": "tool/call"}
-{"data": {"error": {"code": "SUBAGENT_FAILED", "name": "SubagentError"}, "message": {"content": [{"text": "spawn failed", "type": "text"}], "isError": true, "toolCallId": "c3"}}, "seq": 4, "time": 1700000004000, "type": "tool/result"}
-{"data": {"arguments": {"path": "docs/plan.md"}, "name": "read", "subCallId": "s5"}, "seq": 5, "time": 1700000005000, "type": "tool/ptc-dispatch-start"}
-{"data": {"arguments": {"path": "docs/plan.md"}, "content": [{"text": "# Plan v2", "type": "text"}], "isError": false, "name": "read", "subCallId": "s5"}, "seq": 6, "time": 1700000006000, "type": "tool/ptc-dispatch"}

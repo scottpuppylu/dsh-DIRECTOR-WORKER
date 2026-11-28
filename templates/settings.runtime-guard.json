@@ -1,0 +1,61 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"<PYTHON>\" -I -X utf8 \"<DW>/tools/hook_guard.py\" --rules \"<DW>/tools/guard_rules.json\" --profile worker --pause-flag \"<PAUSE_FLAG>\" --audit \"<AUDIT_LOG>\"",
+            "onFailure": "block"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"<PYTHON>\" -I -X utf8 \"<DW>/tools/audit_log.py\" append --log \"<AUDIT_LOG>\""
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"<PYTHON>\" -I -X utf8 \"<DW>/tools/audit_log.py\" append --log \"<AUDIT_LOG>\""
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "deny": [
+      "Read(//**/.env)",
+      "Read(//**/.env.local)",
+      "Read(//**/.env.production)",
+      "Read(//**/*.pem)",
+      "Read(//**/*.key)",
+      "Read(//**/*.p12)",
+      "Read(//**/*.pfx)",
+      "Read(//**/id_rsa)",
+      "Read(//**/id_ed25519)",
+      "Read(~/.ssh/**)",
+      "Read(~/.aws/credentials)",
+      "Read(~/.config/gh/hosts.yml)",
+      "Read(~/AppData/Roaming/GitHub CLI/hosts.yml)",
+      "Read(~/.git-credentials)",
+      "Read(~/.netrc)",
+      "Read(~/.claude/.credentials.json)"
+    ]
+  },
+  "env": {
+    "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB": "1"
+  }
+}

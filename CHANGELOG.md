@@ -1,9 +1,157 @@
-# CHANGELOG — dsh-DIRECTOR-WORKER
+# CHANGELOG（dshdw：DIRECTOR-WORK 的 DeepSeek Harness 版）
 
-本 repo 是 [DIRECTOR-WORK](https://github.com/scottpuppylu/DIRECTOR-WORK) v2.2.2（Claude Code／Claude Desktop 版，MIT）的移植。
-上游的完整變更歷史保留在 [`CHANGELOG-upstream.md`](CHANGELOG-upstream.md)；本檔只記 dsh-DIRECTOR-WORKER（簡稱 dshdw；舊名 DIRECTOR-WORK DeepSeek 版（DW-DS））自己的變更。
+這是變體自己的紀錄。版號在 `VERSION`（變體版號＝上游版號＋`-ds.N`），帶著的基板版號在 `BASE_VERSION`，基板的完整 CHANGELOG 逐位元組放在 `CHANGELOG-upstream.md`。升級時兩份都讀：基板的「遷移」照做，再照這份做變體自己的步驟。版號規則（MAJOR／MINOR／PATCH）和基板相同。
+
+**序號只往上加**（PO 2026-11-28）：`-ds.N` 接著上一版，基板換版也不歸 1（2.6.0-ds.7 的下一版是 3.0.0-ds.8，不是 3.0.0-ds.1）。`adapters/deepseek/ds_version.py check` 驗這條，`release_ds.py` 發版前先跑它。2.6.0-ds.7 以前的紀錄照原樣留在下面；那時的 `CHANGELOG-upstream.md` 是 DW 2.x 的拷貝，現在換成基板 3.0.0 的。
+
+## 3.0.0-ds.8 — 2026-11-28
+
+起點＝dsh 2.6.0-ds.7（commit 199cbb8）。這一版把它對齊到基板 3.0.0（分支 v3-base，先凍結在 e93b51d，後來重新凍結在 commit 9b10371，B1–B19 加小修）：基板檔案逐位元組照抄，DSH 專屬的放進 `adapters/deepseek/`，外加四個登記過的覆寫（`adapters/deepseek/BASE_SYNC.json`）。ds.7 已經併進基板的功能（安全閘門、必讀鏈量測、完成證據、bootstrap_repo、用量防呆、worktree、loop_guard 核心和兩條細判斷、預設強度掛點、`base_sync_check`、`readme_check`）一律改用基板那一份，不留兩份。
+
+### 新增（只有這個變體有）
+
+- `adapters/deepseek/dsh_dispatch.py`（R6）：DSH 沒有 hook，派工前由這支工具把關。依序跑 `spec_gate.py check`、`gate_check.py --hash`，給 `--repo` 時再跑 `worktree.py open`；每一步都要明確 exit 0 並印出該有的那一行，才印 `DSH_DISPATCH: GO` 和 `subagent` 要填的內容。沒有結束碼（逾時、起不來、被砍）、非 0、或不是工單，一律 `BLOCKED`、exit 1。這是防手滑的護欄，不是安全邊界；繞過方式和事後檢查寫在工具說明和 `adapters/deepseek/README.md`。
+- `adapters/deepseek/ds_version.py`：序號規則。VERSION 要是 `<BASE_VERSION>-ds.<N>`，CHANGELOG 第一個標題要是這一版，N 要大於 CHANGELOG 標題和 tag（本機，加 `--remote` 時也查遠端）裡每一個 ds 序號。`3.0.0-ds.1` 會被擋。
+- `adapters/deepseek/release_ds.py`：發版先跑 `ds_version`、`base_sync_check`、`selftest_deepseek.py`，都過了才交給基板 `tools/release.py`（沒有 `--execute` 一樣只試跑）。
+- `adapters/deepseek/base_sync_check.py`：只是入口，實際檢查呼叫基板 `tools/base_sync_check.py`（B6，和 clddw 1e350a0 同一種薄殼），預設 `--variant` 是 repo、`--registry` 是同資料夾的 `BASE_SYNC.json`；基板工具不在印 `BASE_SYNC: INVALID`、exit 2。變體和基板逐檔比對；沒登記的不同、少檔、多檔、登記了卻一樣、README 沒寫到的覆寫、版號檔不對，都 FAIL。
+- `adapters/deepseek/VARIANT.json`：`default_strength` light（基板 `safety_gate.py` 讀，B15）、`rules_section` 指向 `AGENTS_PROJECT_SECTION.md`（基板 selftest 量必讀鏈時把這段算進去，B19）。
+- `adapters/deepseek/install_deepseek.py`：把轉接層裝到 `<專案>/DIRECTOR/adapters/deepseek/`（先試跑，`--execute` 才寫；先暫存、驗 SHA-256、舊檔備份、寫清單；`check` 驗裝好的檔）。基板工具照樣用 `tools/install.py` 裝。
+- `adapters/deepseek/selftest_deepseek.py`：轉接層測試，取代 ds.7 的 `tools/selftest_ds.py` 裡 DSH 專屬的部分。每支關卡工具都測「沒有結束碼 → 不能過」。
+- `adapters/deepseek/DSH_EFFORT_TABLE.json`：ds.7 的 DSH effort 表（`routine` low／high、`xhigh` 的類別換成 high／max、多一個 `mechanical`），改成基板 `dispatch_check.py --table` 讀的檔；`selftest_deepseek.py` 的 `effort_table` 用基板的讀表程式驗它。`mechanical` 是 `off`／low（基板 3.0.0 B18 起認得 `off`）。檔名刻意不是 `EFFORT_TABLE*.json`：基板 B11 會把那種檔當成預設表，但基板的 `test_dispatch_effort_250` 是照基板預設表寫的，在這個 repo 會錯 2 項（見「待總監」）；所以照舊用 `--table` 帶。
+- `.github/workflows/deepseek-adapter.yml`：Windows、Ubuntu × Python 3.9、3.12 跑 `selftest_deepseek.py` 和對基板的 `base_sync_check`。Ubuntu 固定 `ubuntu-24.04`（和基板 `selftest.yml` 一樣：`ubuntu-latest` 已是 26.04，setup-python 沒有它的 3.9）。
+
+### 搬家（ds.7 的 DSH 檔，內容照留）
+
+- `tools/dsh_audit.py`、`dsh_doctor.py`、`dsh_guard.py`、`dsh_session.py`、`dsh_setup_check.py`、`dsh_usage.py`、`verify_dsh_run.py`、`test_verify_dsh_run.py` 和 fixtures → `adapters/deepseek/`。找同伴檔時先找同一個資料夾，再找上兩層的 `tools/`（repo 和裝好的 `DIRECTOR/` 佈局相同）。
+- `templates/AGENTS_PROJECT_SECTION.md`、`templates/VERIFY_DSH_RUN.json` → `adapters/deepseek/`。
+- `docs/11_dsh_operations.md` → `adapters/deepseek/DSH_OPERATIONS.md`（需要時才讀，不在必讀鏈）。
+- `DEEPSEEK-PORT.md`、`tools/DSH-TOOLS.md` → 平台事實、工具清單、NOT_PORTED 併進 `adapters/deepseek/README.md` 和根目錄 README。
+- ds.7 README 給新手看的內容 → `adapters/deepseek/DSH_USER_GUIDE.md`（需要時才讀；路徑改成專案內 `DIRECTOR/`、`adapters/deepseek/`）。根目錄 README 改成變體 README（約 7.7 KB）。
+- 工具說明、`DSH_OPERATIONS.md`、`AGENTS_PROJECT_SECTION.md` 裡的指令路徑改成 `<REPO>/DIRECTOR/tools/`（基板）和 `<REPO>/DIRECTOR/adapters/deepseek/`（DSH）；`dsh_doctor.py` 查的轉接層檔多了 `install_deepseek.py`。
+
+### 行為改變
+
+- 預設強度改成 light（SPEC_VARIANTS_300 dsh 一節）：寫在 `adapters/deepseek/VARIANT.json`，基板 `safety_gate.py` 照它（B15）；`safety_gate.py` 不再覆寫，`--show` 印 `default strength light from adapters/deepseek/VARIANT.json`。專案 `director_work.json` 寫了 `strength` 就照它；從 light 往上收緊不用問 PO。硬線不受強度影響。
+- `dsh_session.py --worker-worktree`／`--cwd-check`／`--temp-env`／`--worktree-status` 拿掉，改用基板 `tools/worktree.py open|cwd|temp|status`；舊參數會印 `MOVED` 並 exit 2，不會默默不做。
+- `dsh_audit.py loops` 的判斷改用基板 `loop_guard` 的偵測核心（`wait_tools` 含 `wait_agent`），只留讀 DSH 紀錄的部分。ds.7 兩條比較細的判斷（來回呼叫但結果有變不算卡住、兩次錯誤之間有回話不算重試）已進基板（B17）：轉接層的 `ping_pong_progressed`、`retry_unanswered` 刪掉，改成把每個呼叫的結果和 `text_before`（上一個呼叫之後、這個呼叫之前有沒有寫字）交給基板判斷。輸出格式不變。
+- `dsh_usage.py` 的數字防呆改用基板 `_common.usage_number`（D7）。
+- `dsh_doctor.py` 改查 3.0.0 佈局：基板 `tools/` 的共用工具＋轉接層的 DSH 檔。ds.7「Claude 專用工具不能存在」那條拿掉：基板檔逐位元組照抄，那些檔一定在，只是 DSH 上不用。
+- `dsh_setup_check.py` 的用法改成專案內的 `DIRECTOR/`（R3），必要檔多了 `DIRECTOR/INDEX.md`（R5）。
+- 總監資料夾進專案、不進 git（R3）；換手只讀 `DIRECTOR/INDEX.md`（R5），提示詞是一句：「讀 `DIRECTOR/INDEX.md`，照它接手，不要重問已確認的需求。」
+- 補回 ds.7 的兩個行為（建置時對照 CROSS_VARIANT_AUDIT 發現少了）：`.memsearch/` 不進 git（BOOTSTRAP 第 7 步在 DSH 不做壓縮設定，但 `bootstrap_repo.py --add .memsearch/` 照做；README 和 `DSH_OPERATIONS.md` 寫明）；派工 effort 用 DSH 的表（`dispatch_check.py --table <D>/adapters/deepseek/DSH_EFFORT_TABLE.json`）。
+- 必讀鏈：ds.7 的 docs 01–13（約 191 KB）改成基板的必讀鏈，量測結果寫在 README。
+- 發版前獨立審查的修正：`dsh_audit.py` 的 `loops`、`reads`、`inject`、`build` 遇到 DSH 紀錄裡被截斷的 emoji（單獨的 surrogate，例如 `\ud83e`）不再 UnicodeEncodeError、exit 1：交給基板 `audit_log` 算雜湊前先把它換成 U+FFFD，完整的 emoji 不動；`verify` 遇到這種行印 `BROKEN`、exit 1（夾具 `fixtures/lone_surrogate.jsonl`，測試 `audit_lone_surrogate`）。`SHADOW WARN` 改指 `adapters/deepseek/DSH_OPERATIONS.md`；README 安裝一節寫明 `DONE` 或 `OK` 都算裝好。
+
+### 登記的覆寫（`adapters/deepseek/BASE_SYNC.json`）
+
+| 基板檔 | 改了什麼 | 理由 |
+|---|---|---|
+| `README.md` | 整份換成變體 README | 照 `templates/VARIANT_README.md` |
+| `CHANGELOG.md` | 整份換成這份 | 變體自己的紀錄；基板的在 `CHANGELOG-upstream.md` |
+| `VERSION` | `3.0.0-ds.8` | 變體版號 |
+| `tools/selftest.py` | 只改 README 檢查的兩處字（`test_onboarding_v210` 的必讀句、`PO_PAGE_WANTED` 的待決頁句）換成 DSH 版的句子 | DSH 沒有 Claude 待決頁、沒有 docs/11（和 cdx 同一種改法）；讀版號（B16）、預設強度（B15）、規則檔段落（B19）基板自己會讀，不再改 |
+
+### 跟上游的紀錄（基板 3.0.0）
+
+沿用＝基板檔逐位元組照抄，`base_sync_check.py` 驗過；改寫＝在 `adapters/deepseek/` 或登記的覆寫裡改；不做＝這個變體沒有或 DSH 上不用（檔案照抄，不刪）。
+
+| 上游項目 | 怎麼處理（沿用／改寫／不做） | 理由 |
+|---|---|---|
+| `tools/_common.py`（G1） | 沿用 | 平台無關；dsh_usage 用它的 `usage_number` |
+| `_common.exit_code_from`／`gate_status`（G2） | 沿用 | dsh_dispatch 照同一條規則（沒有結束碼就不是 PASS） |
+| `tools/bootstrap_repo.py`（D6） | 沿用 | 取代 ds.7 的同名工具。基板預設不排除 `.memsearch/`，DSH 要帶 `--add .memsearch/`（本機路徑放 `AGENTS.local.md` 時再加 `--add AGENTS.local.md`），寫在 `DSH_OPERATIONS.md` 和 README |
+| `tools/dispatch_check.py`（N1） | 沿用＋改寫（表） | 程式照抄；DSH 的 effort 表放在 `adapters/deepseek/DSH_EFFORT_TABLE.json`，用 `--table` 帶。`mechanical` 用 `off`／low（基板 B18 已加 off） |
+| `memory_size_check --chain`（D4） | 沿用 | ds.7 併進基板的；這一版用它量必讀鏈 |
+| `_common.usage_*`（D7） | 沿用 | ds.7 併進基板的 |
+| `usage_report`、`usage_mix`（D7） | 不做 | 讀 Claude Code 的紀錄；DSH 用 `dsh_usage.py` |
+| `tools/safety_gate.py`（D1） | 沿用 | ds.7 併進基板的；預設 light 寫在 `VARIANT.json`（B15） |
+| `gate_check --order`／`--match`（D1） | 沿用 | 平台無關 |
+| `setup_check`（D1） | 改寫 | DSH 的待決是 `PO_PENDING.md`＋`ask_user_question`，用 `dsh_setup_check.py` |
+| `templates/WORK_ORDER.md`（D1） | 沿用 | 平台無關 |
+| selftest `test_safety_gate_300` | 沿用 | 基板 B15 自己處理變體預設；light 另在 `selftest_deepseek.py` 測 |
+| selftest `test_gate_fail_closed_300`（G2） | 沿用 | 照跑 |
+| `tools/spec_gate.py`（R6、R7、C1） | 沿用＋改寫 | 工具照抄；DSH 沒有 hook，派工改由 `dsh_dispatch.py` 擋 |
+| `templates/BRIEF.md` | 沿用 | 平台無關 |
+| selftest `test_spec_gate_300` | 沿用 | 照跑 |
+| 總監資料夾進專案、不進 git（R3、G4） | 沿用 | 照做；`dsh_setup_check` 的路徑跟著改 |
+| `tools/handoff.py`（R5、C3） | 沿用 | 這一版用它跑 DW→dsh 換手測試 |
+| `templates/DIRECTOR_HANDOFF.md`（R5、C10） | 沿用 | 平台無關 |
+| `tools/delivery.py`（C2、C4） | 沿用 | 平台無關 |
+| `tools/worktree.py`（D3、G6） | 沿用 | 取代 ds.7 `dsh_session.py` 的 worktree 參數；dsh_dispatch 用它開 worktree |
+| `tools/install.py`（C7） | 沿用＋改寫 | 基板工具用它裝；轉接層另用 `install_deepseek.py` |
+| `templates/VARIANT_README.md`（D8、G8） | 沿用 | README 照它寫 |
+| `docs/13`、`docs/14`（G5） | 沿用 | 平台無關 |
+| 「隔離要能驗證」（C8） | 沿用 | DSH 用 `worktree.py status|cwd` 驗 |
+| `transcript_audit` 的 `lines`（C9） | 不做 | 讀 Claude Code 紀錄；DSH 用 `dsh_audit.py` |
+| `gate_check --final` 要真的跑完（D2） | 沿用 | ds.7 併進基板的 |
+| `loop_guard` 的 `wait_tools`（D5） | 沿用 | `dsh_audit loops` 用它的核心 |
+| `release.py` 的變體版號（plan 6.9-3） | 沿用＋改寫 | 照它發版；序號接續由 `ds_version.py` 另外擋 |
+| `tools/privacy_scan.py`、`privacy_allow.txt` | 沿用 | 發版前一樣要 CLEAN |
+| 必讀瘦身（G5、R4、D9）、小白鏈 `docs/12a` | 沿用 | 量過的數字寫在 README |
+| 審查第一、二階段的修正（P1-x、P2-x） | 沿用 | 跟著基板檔照抄 |
+| `hook_guard.py`、`setup_project_settings.py`、`poll_hint.py`、`settings.runtime-guard.json`、`guard_sessions.json` | 不做 | DSH 沒有 hook；指令檢查改用 `dsh_guard.py`（手動跑）＋事後 `dsh_audit.py` |
+| `doctor.py` | 不做 | 查 Claude Code 的 hook 設定；DSH 用 `dsh_doctor.py` |
+| `context_probe.py` | 不做 | 要啟動 `claude` |
+| `choice_reconcile.py`、`browser_check.py`、`templates/choice_page.html` | 不做 | DSH 沒有 Artifact 選項頁；待決用 `ask_user_question`＋`PO_PENDING.md` |
+| `tools/container/` | 不做 | 容器裡跑的是 Claude Code worker；DSH 用 `subagent`＋worktree |
+| `docs/11_claude_desktop.md`、`templates/CLAUDE_PROJECT_SECTION.md` | 改寫 | DSH 版是 `adapters/deepseek/DSH_OPERATIONS.md`、`AGENTS_PROJECT_SECTION.md` |
+| 遷移：最終驗收、讀法、換總監、初衷卡、總監資料夾、`delete_guard` exit 2、Standard／Strict 工單、空紀錄、`memory_size_check` INVALID、`EXIT_CODE:` | 沿用 | 照做 |
+| 延後：`base_sync_check.py` | 沿用 | 已在 B6 進基板；轉接層只留入口 |
+| B1 `scope_check --candidate`、B4 大小上限和保護測試 | 沿用 | 平台無關 |
+| B2 `gate_check --final` 的失敗字樣、B12 `--skip-old-e2e` | 沿用 | 平台無關 |
+| B3 只發驗過的 commit、B5 describe、B9 公開掃描、B14 序號接續 | 沿用 | `release_ds.py` 交給基板 `release.py`；`ds_version.py` 照留（多查 CHANGELOG 標題） |
+| B6 `readme_check.py`、`base_sync_check.py` | 沿用 | README 照新的 `templates/VARIANT_README.md` 補齊，`readme_check` PASS；`base_sync_check` 見上 |
+| B7 README「所屬系列」等節 | 改寫 | 變體 README 自己寫（覆寫），凍結 SHA 改 9b10371 |
+| B8 `gate_check --report-skeleton` | 沿用 | 平台無關 |
+| B10 `status_gen` 的 LOOPS 段 | 沿用 | 讀 `loop_guard scan --out`；DSH 的 `dsh_audit loops --out` 照舊 |
+| B11 Claude 專用工具標選用、變體自己的 effort 表 | 沿用＋改寫 | 選用表照抄；effort 表不用 `EFFORT_TABLE*.json` 檔名（見「新增」和「待總監」） |
+| B13 `bootstrap_repo --add` 的 `/` 路徑 | 沿用 | 平台無關 |
+| B15 變體預設強度 | 沿用 | `VARIANT.json` `default_strength` light；拿掉 `safety_gate.py` 覆寫 |
+| B16 selftest 讀變體版號 | 沿用 | selftest 覆寫只剩 README 檢查字 |
+| B17 `loop_guard` 的兩條細判斷 | 沿用 | 刪掉 `dsh_audit.py` 的兩支副本，改餵 `text_before` |
+| B18 effort `off` | 沿用 | DSH 表的 `mechanical` 改成 off／low |
+| B19 必讀鏈算進規則檔段落 | 沿用 | `VARIANT.json` `rules_section`；兩條鏈的數字在 README 量測和報告 |
+| 小修：`report_vs_audit` 重建工具名、一題一個號碼（`CH-xx`）、`--help` 的 UTF-8 | 沿用 | `dsh_audit.py build` 寫 `kind=rebuild` 時印對工具名 |
+| 延後：CI 收據（C5）、整合試跑（C6） | 不做 | 基板也延後到 3.0.x |
+| 基板「留到 3.0.x」的審查 P2 | 沿用 | 跟基板同一個排程 |
+
+### 拿掉（NOT_PORTED）
+
+| 項目 | 為什麼沒做 | 少了它會怎樣 | 替代做法 |
+|---|---|---|---|
+| 派工前的 PreToolUse 閘門 hook（clddw 有） | DSH 沒有 hook | 總監可以跳過 `dsh_dispatch.py` 直接叫 `subagent` | 規則要求先跑 `dsh_dispatch.py`；事後 `dispatch_check --log`、`gate_check --match --dispatch-log` 會 FAIL，`dsh_audit.py build` 的紀錄有每一次 `subagent` |
+| PostToolUse 動作紀錄 hook | 同上 | 沒有即時紀錄 | `dsh_audit.py` 從 DSH session 紀錄事後重建 |
+| 以上「不做」列的 Claude 專用工具 | DSH 上用不到 | 無 | 檔案照抄留著（不刪，`base_sync_check` 才比得過）；DSH 對應工具見上表 |
+
+### 舊版紀錄
+
+- 2.6.0-ds.7 以前有 11 版沒有「對齊初衷」行（基板 selftest 會擋）。這一版在每版標題下補一行，說明當時沒寫、現在補記；舊版內容不改。
+
+### 已知限制／待總監
+
+- 已解決（基板 9b10371）：`release.py` 擋序號從 1 重來（B14）；預設強度掛點（B15）；selftest 讀 `BASE_VERSION`（B16）；ds.7 兩條 loop 判斷（B17）；effort `off`（B18）；AGENTS 段落算進必讀鏈（B19）；`base_sync_check`、`readme_check` 進基板（B6）。
+- 基板的錯（沒在 dshdw 改）：基板 B11 讓 `adapters/*/EFFORT_TABLE*.json` 變成預設表，但 `test_dispatch_effort_250` 沒有像 B11 的測試那樣在「變體有自己的表」時跳過，所以有這種檔的變體全套會錯 2 項。dsh 先把表取名 `DSH_EFFORT_TABLE.json`、照舊用 `--table`；基板修好後可改回 `EFFORT_TABLE_DSH.json`，吃 B11 預設。
+- README 的兩句檢查字（Claude 待決頁、docs/11）仍要覆寫 `tools/selftest.py`；基板要不要讓變體自己提供這兩句，總監決定。
+- 一個帶著基板 `v3.0.0` tag 的變體 repo，`release.py` 會擋 `3.0.0-ds.8`（審查 P2-16）；發版前先確認 dsh repo 沒有基板的 tag。
+
+### 遷移
+
+- 從 2.6.0-ds.7 升上來：先照 `CHANGELOG-upstream.md` 的 3.0.0「遷移」做完；用基板 `tools/install.py install --to <REPO>/DIRECTOR/tools --execute` 裝工具，再跑 `python -I -X utf8 adapters/deepseek/install_deepseek.py install --to <REPO>/DIRECTOR --execute`；專案 `AGENTS.md` 的段落換成 `adapters/deepseek/AGENTS_PROJECT_SECTION.md`；最後跑 `dsh_doctor.py` 和 `dsh_setup_check.py <REPO>/DIRECTOR`，兩個都 PASS 才算完成。
+- 原本呼叫 `tools/dsh_*.py` 的地方改成 `DIRECTOR/adapters/deepseek/dsh_*.py`；`dsh_session.py --worker-worktree` 等改成 `tools/worktree.py`。
+- 派工：每次開 worker 前跑 `dsh_dispatch.py`，看到 `GO` 才叫 `subagent`，把印出的 `LOG:` 那行記進 `DIRECTOR_LOG.md`。
+
+### 致謝
+
+基板 DIRECTOR-WORK（MIT）；clddw 3.0.0-cld.1 的 `base_sync_check.py` 和 `tools/selftest.py` 讀版號的改法（都已進基板）、clddw 1e350a0 合併 9b10371 的做法；ds.7 以前的 dsh 工作。
+
+對齊初衷：
+1. 幫到誰：用 DeepSeek Harness 的總監和 PO。規格沒確認就不能派工，DSH 沒有 hook，改由派工工具擋、事後工具查；預設強度 light，硬線照開。
+2. Desktop：DSH 桌面版讀專案的 `AGENTS.md`；沒有新的每輪步驟，只多「派工前跑一次 `dsh_dispatch.py`」。
+3. 服務的初衷：先談清楚再動手；硬線靠工具，不靠文字；一個基板加轉接層，不各自分岔。
 
 ## 2.6.0-ds.7（2026-11-24）
+
+對齊初衷：這一版當時沒寫這一行；3.0.0-ds.8 補記，當時的內容不追補。
 
 本版集中修復交接研究階段發現的所有工具、文件與環境缺陷（A1～A10、B2 與 CI 補齊），確保「閘門真的會擋」在乾淨 worktree、不完整 E2E、Token 統計、worktree ignore、session 稽核與環境健檢上全面落實。
 
@@ -28,6 +176,8 @@
 - **CI 與測試**：新增 `.gitattributes` 與 `.github/workflows/ci.yml`（Windows + Ubuntu Python 3.9/3.12 + Node 24）；更新 `selftest_ds.py` 中 CI 安全測試與 E2E fixture，並新增 7 項 `2.6.0-ds.7` 回歸測試（`tests=115`）。
 
 ## 2.6.0-ds.6（2026-11-22）
+
+對齊初衷：這一版當時沒寫這一行；3.0.0-ds.8 補記，當時的內容不追補。
 
 跟上上游 DW 2.6.0（分支 `claude/dw-v260`，本機 commit 787f67b）。上游 2.6.0 的兩個新工具和三個工具的新選項都是自己執行、只讀，不靠 hook，所以五支工具原樣搬（和上游逐位元組相同，換行 LF）。ds 序號不加：這一版沒有新的 DSH 試驗修正。安全閘門全部保留，不加回 OpenSpec／SDD。每輪必讀（指示鏈）沒有變大。上游原文見 `CHANGELOG-upstream.md`。
 
@@ -59,6 +209,8 @@
 - 五支工具和上游 2.6.0 逐位元組相同（去掉 CR 後比 SHA-256）。
 
 ## 2.5.0-ds.6（2026-11-16）
+
+對齊初衷：這一版當時沒寫這一行；3.0.0-ds.8 補記，當時的內容不追補。
 
 WO-DS-013。跟上上游 DW 2.5.0（tag v2.5.0，decab48）。上游 2.5.0 的新檢查本來就是自己執行、預設只提醒，不靠 hook，所以多半原樣搬；要改寫的只有讀紀錄的兩項（loops 的時間範圍、最常重讀的檔案），因為 dshdw 讀的是 DSH 的 `session.v4.jsonl.zstd` 事件，不是 Claude 的 transcript。ds 序號不加：這一版沒有新的 DSH 試驗修正。安全閘門全部保留，不加回 OpenSpec／SDD。每輪必讀（指示鏈）沒有變大。上游原文見 `CHANGELOG-upstream.md`。
 
@@ -120,6 +272,8 @@ WO-DS-013。跟上上游 DW 2.5.0（tag v2.5.0，decab48）。上游 2.5.0 的�
 - fixture 全是合成資料，沒有真實紀錄的內容和真實路徑。
 
 ## 2.4.0-ds.6（2026-11-15）
+
+對齊初衷：這一版當時沒寫這一行；3.0.0-ds.8 補記，當時的內容不追補。
 
 WO-DS-012。跟上上游 DW 2.4.0（tag v2.4.0，df8ddfd）。上游 2.4.0 新增的小幫手多半是 Claude Code hook（PreToolUse、PostToolUse、SessionStart）；**DSH 一個 hook 都沒有**，所以這一版把它們全部改成事後檢查，或由 agent 照規則在恢復時自己跑一次。ds 序號不加：這一版沒有新的 DSH 試驗修正。安全閘門全部保留，不加回 OpenSpec／SDD。上游原文見 `CHANGELOG-upstream.md` 和上游 repo。
 
@@ -192,6 +346,8 @@ WO-DS-012。跟上上游 DW 2.4.0（tag v2.4.0，df8ddfd）。上游 2.4.0 新�
 
 ## 2.3.0-ds.6（2026-11-15）
 
+對齊初衷：這一版當時沒寫這一行；3.0.0-ds.8 補記，當時的內容不追補。
+
 WO-DS-011。產品改名為 **dsh-DIRECTOR-WORKER**（簡稱 **dshdw**；舊名 DIRECTOR-WORK DeepSeek 版（DW-DS）），並加上 DeepSeek 工作品質的事後偵測。DSH 沒有 PreToolUse hook，dshdw 不能即時攔截工具呼叫，所以這一版全部是**事後偵測＋規則**：從 session 紀錄找問題，在檢查點、閘門、狀態報告裡讓人看見。不做插件，用法不變（照樣貼啟動提示詞）。這一版和 2.3.0-ds.5 一起發布（ds.5 沒有單獨發布）。
 
 ### 新功能
@@ -241,6 +397,8 @@ WO-DS-011。產品改名為 **dsh-DIRECTOR-WORKER**（簡稱 **dshdw**；舊名 
 
 ## 2.3.0-ds.5（2026-11-15）
 
+對齊初衷：這一版當時沒寫這一行；3.0.0-ds.8 補記，當時的內容不追補。
+
 未單獨發布，隨 2.3.0-ds.6 一起發布（沒有 v2.3.0-ds.5 tag）。
 
 WO-DS-010。跟上上游 DW 2.3.0（tag v2.3.0，de08549），再加一項 DS 專屬的 lead 開工 cwd 檢查。上游原文附在 `CHANGELOG-upstream.md`。安全閘門（`safety` 區塊：tests_first、plan_gate、spec_review_for_standard、stop_after_rounds、order_limits、protected_tests、不得自行關閉）全部保留；不加回 OpenSpec／SDD 流程。ds 序號沒有加：這一版沒有新的 DS 試驗修正。
@@ -275,6 +433,8 @@ WO-DS-010。跟上上游 DW 2.3.0（tag v2.3.0，de08549），再加一項 DS �
 - 每輪必讀（docs/01、03、06、08）：10,964 → 10,964 bytes（這幾個檔沒改）。
 
 ## 2.2.5-ds.5（2026-11-15）
+
+對齊初衷：這一版當時沒寫這一行；3.0.0-ds.8 補記，當時的內容不追補。
 
 WO-DS-009 第 3 版。這一版處理 WO-DS-008 r2 試驗（滿分 113：Claude 110、DSH 開 SDD 97.5、DSH 關 SDD 95）裡歸 DW-DS 的項目。並移植上游 DW 2.2.5（DW commit ab1460f，B7），上游原文附在 `CHANGELOG-upstream.md`。
 
@@ -365,6 +525,8 @@ WO-DS-009 第 3 版。這一版處理 WO-DS-008 r2 試驗（滿分 113：Claude 
 
 ## 2.2.4-ds.4（2026-11-14）
 
+對齊初衷：這一版當時沒寫這一行；3.0.0-ds.8 補記，當時的內容不追補。
+
 對應上游 2.2.4（DW commit 18d8ddb；5428682 之後另有 dad65a2 的 UNVERIFIED 和 18d8ddb 的 status 截寬與長路徑）。這一版處理 WO-DS-006 試驗（DSH 有／沒有 SDD 兩組，對照 Claude）比較表 §10 裡歸 DW-DS 的項目，並移植上游 2.2.4 的通用修正。ds 序號從 3 升到 4（總監待辦「ds 序號可以往下」）。
 
 ### 工單大小上限搬出 sdd（#8、S-P1）
@@ -426,6 +588,8 @@ WO-DS-009 第 3 版。這一版處理 WO-DS-008 r2 試驗（滿分 113：Claude 
 - 每輪必讀（docs/01、03、06、08）：10,964 → 10,964 bytes。
 
 ## 2.2.3-ds.3（2026-11-14）
+
+對齊初衷：這一版當時沒寫這一行；3.0.0-ds.8 補記，當時的內容不追補。
 
 對應上游 2.2.3（DW commit 4f6c9e6）。這一版要讓 OpenSpec 規格層下次一定會被用上，並帶入 WO-DS-004 試驗（DSH 和 Claude 同一需求各跑一次）學到的事。版本號是 PO 指定的：上游段從 2.2.2 升到 2.2.3，ds 序號維持 3；`release.py` 的版本規則因此改成比「(上游版本, ds 序號)」整組（總監裁定，見「工具修正」）。
 
@@ -543,6 +707,8 @@ ds.3 對應上游 2.2.2，是工具版：發版一次到位、派工前確認 BA
 
 ## 2.2.1-ds.2（2026-11-14）
 
+對齊初衷：這一版當時沒寫這一行；3.0.0-ds.8 補記，當時的內容不追補。
+
 ds.2 SDD 建在 2.2.1-ds.1 之上：本版把 ds.2 分支（原本從 2.2.0-ds.1 開出，沒有單獨發佈）merge 進 2.2.1-ds.1。2.2.1-ds.1 從上游移植的工具改動全部保留，再加上 ds.2 的 SDD／OpenSpec。ds.2 分支上的小修正：`memory_size_check.py` 補 `import re`（上游沒有，帶進來）；`dsh_setup_check.py` 把 `CH-xx` 當完整條目的那一個不帶，改用 2.2.1-ds.1 已有的修法（`OD/ACT` 以外的 `ID:` 行跳過並提示，selftest `setup_shadow` 有測）。
 
 規格先行（SDD）：DSH 上的 worker（deepseek-flash）判斷力較弱，所以規格、驗收測試和計畫在寫程式前寫死並鎖住。規格層採用現成的 OpenSpec（Fission-AI/OpenSpec，MIT，鎖 1.16.0），DW-DS 只寫膠水。完整說明見 `docs/13_sdd_openspec.md`。
@@ -600,7 +766,7 @@ ds.2 SDD 建在 2.2.1-ds.1 之上：本版把 ds.2 分支（原本從 2.2.0-ds.1
 - `dsh_setup_check.py` 新檢查是 shadow，exit code 不變；用 `--strict` 前，範本的範例條目（`ID: OD-01（要 PO 決定）或 ACT-01……`）與佔位會被提示。
 
 ### 驗證
-- `selftest_ds.py`：11 項 → 14 項（新增 `matching_221`：21 個比對案例＋2 個 CLI＋6 個突變都被抓到；`setup_shadow`：7 種錯誤 shadow 不失敗、`--strict` 失敗，乾淨資料夾 `--strict` 通過，5 種提示；`audit_rebuild`：第 1 行、verify、改過的行被拒、report 的 note）。`dsh_audit_and_report` 改成檢查第 1 行是 rebuild，session_id 從後面的行取。紀錄：`D:/DIRECTOR-WORK-HANDOFF/v221/selftest_ds_221.log`。
+- `selftest_ds.py`：11 項 → 14 項（新增 `matching_221`：21 個比對案例＋2 個 CLI＋6 個突變都被抓到；`setup_shadow`：7 種錯誤 shadow 不失敗、`--strict` 失敗，乾淨資料夾 `--strict` 通過，5 種提示；`audit_rebuild`：第 1 行、verify、改過的行被拒、report 的 note）。`dsh_audit_and_report` 改成檢查第 1 行是 rebuild，session_id 從後面的行取。紀錄：`<WS>/v221/selftest_ds_221.log`。
 - 沒測到的（已知限制）：`dsh_audit build` 只在本機現有的 DSH session 紀錄上跑過（selftest 的 `dsh_audit_and_report`），沒在 DSH 裡實際跑一輪派工；比較報告 D 節列的沙箱、`git clone` 啟動流程仍未實測。
 
 對齊初衷：
@@ -611,6 +777,8 @@ ds.2 SDD 建在 2.2.1-ds.1 之上：本版把 ds.2 分支（原本從 2.2.0-ds.1
 5. 舊檔案：照樣能讀；`report_vs_audit` 原本判錯的那幾類結果會變。
 
 ## 2.2.0-ds.1（2026-11-12）
+
+對齊初衷：這一版當時沒寫這一行；3.0.0-ds.8 補記，當時的內容不追補。
 
 第一個 DeepSeek Harness 版，對應上游 2.2.0。流程核心（角色、工單、gate、證據、續航、初衷卡）不變，平台層重寫。
 

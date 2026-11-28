@@ -1,15 +1,12 @@
 # TASK REPORT（一個 gate 一則，一次寫完整）
 
-省事的寫法（2.2.2-ds.3）：`python -I -X utf8 tools/gate_check.py --report-skeleton <工單> --repo <專案> --out <報告路徑>` 會照工單把 TASK_ID、MODEL、BASE、ORDER、ORDER_SHA256 和每條 AC 一列先填好，並印出錄證據、scope_check、`--match` 的完整指令；只要把 `<...>` 換成實際內容。不用讀工具原始碼學格式。
-
 ```text
 首行：<一句話結論>
 TASK_ID / WORKER / MODEL / BRANCH / BASE / HEAD / WORKTREE_CLEAN(yes|no)
-  WORKER 寫子代理名稱（例：w1）；MODEL 寫 deepseek-flash，EFFORT 寫 off / low / high / max，兩者都要和工單一致（docs/05）
+WORKTREE: <照抄 scope_check.py 印的 WORKTREE: 那一行（隔離 worktree / 共用 checkout），不自己寫（2.2.5）>
   HEAD 寫 git rev-parse HEAD 的完整 40 位（Strict 一定要 40 位，總監拿它和審查的 commit 比）
 ORDER: <WO-檔名.md> REVISION <n>（REVISION 要和工單現在的相同）
 ORDER_SHA256: <開工時跑 gate_check.py --hash 工單 的 64 位輸出>
-WORKTREE: <隔離 worktree | 共用 checkout ...；由 `scope_check.py`、`dsh_session.py --worktree-status <checkout>` 或 `--report-skeleton` 印出，照抄，不手填（2.2.5-ds.5；同一個函式，上游 DW 2.2.5 B10）>
 CANDIDATE_ID: <給 PO 看的成品 id，和 PO_ACCEPTANCE 紀錄的 candidate_id 相同；同一個 commit 有兩份以上成品時必填，只有一份可省>
   成品的 commit、入口檔與其 SHA-256、manifest 的 SHA-256 以 PO_ACCEPTANCE 紀錄為準，報告不重抄；trace_report 靠這個 id 找到那筆紀錄（2.2.0）
 RESULT: PASS | PARTIAL | BLOCKED | FAIL
@@ -20,17 +17,14 @@ RESULT: PASS | PARTIAL | BLOCKED | FAIL
 DONE: 完成項目，每項附證據路徑
 TESTS: 實際執行的測試與結果；沒跑的寫 NOT_RUN
 SCOPE_CHECK: PASS | VIOLATION | NOT_RUN，貼 scope_check.py 的最後一行
-PROTECTED_CHANGED: 改到的受保護測試檔（TESTS_LOCKED 或 protected_tests），逐檔列出，逗號分隔；沒有就寫 NONE（無）。照抄 scope_check.py 印的同名行；gate_check --match 會拿它對 diff（2.2.4-ds.4）
+PROTECTED_CHANGED: （有保護的測試檔時）照抄 scope_check.py 印的那一行：改到的保護測試檔，或 NONE（3.0.0 B4）
 EVIDENCE: 重跑指令與產物雜湊的紀錄路徑（evidence_record.py）；沒有就寫 NONE: 原因
-AUDIT_RANGE: （選用）動作紀錄的區段行（audit_log.py cite 印出的那一行）；動作紀錄由 dsh_audit.py 從 session 紀錄產生
-AUDIT_LOG: （選用）dsh_audit.py build 產出的動作紀錄路徑；沒有就寫 NONE
-AGENT_NAME: （選用）本子代理名稱（例：w1）；有動作紀錄時一起寫，總監才知道是哪條線
+AUDIT_RANGE: （選用）audit_log.py cite 印出的那一行；有裝動作紀錄才寫
+SESSION_ID: （選用）本 session 的 session_id；有裝動作紀錄才寫
 RAN: （選用）一行一個實際跑過的指令：- `指令` exit=N at=HH:MM
-  總監用 report_vs_audit.py 拿 RAN 和 TESTS / EVIDENCE / DONE 裡的 selftest、Unity、Blender、雜湊指令
-  對動作紀錄（--log <dsh_audit.py 產生的紀錄>）；沒有動作紀錄時記 UNKNOWN，不當成通過或失敗
-  2.2.5 起 RAN 行用 ran_line.py 產生，不手打：ran_line.py --to 報告 -- 指令（代跑）或 --exit N --cmd "指令"（剛跑完補記）
-  dsh_audit 2.2.5-ds.5 起整條指令都記（不再截 500 字）；用 --input-limit 截過的行標 input_cut，報告照抄整條即可
-  自寫腳本和暫存輸出放 WORK_DIR，不放 scratchpad 或系統暫存資料夾（算工作區外，總監重跑不到；docs/02）；開工先把 TEMP／TMP／TMPDIR 設成 WORK_DIR/tmp（`dsh_session.py --temp-env <WORK_DIR>`）
+  2.2.5 起用 ran_line.py 產生，不手打：ran_line.py --to 報告 -- 指令（代跑）或 --exit N --cmd "指令"（剛跑完補記）
+  總監用 report_vs_audit.py 拿 RAN 和 TESTS / EVIDENCE / DONE 裡的 selftest、Unity、Blender、雜湊指令對動作紀錄
+  自寫腳本和暫存輸出放 WORK_DIR，不放 scratchpad 或系統暫存資料夾（算工作區外，總監重跑不到；docs/02）
 ACCEPTANCE: 工單 E 節每條一列，不增不減。狀態：AUTO 填 PASS / FAIL / BLOCKED / UNVERIFIED；
   REVIEW 最多填 READY_FOR_REVIEW；PO 只填 PENDING_PO。AUTO 填 PASS 時證據欄寫 evidence_record 的 .json 檔名。
   交件前跑 gate_check.py --match 本報告 工單 --evidence-dir 證據資料夾

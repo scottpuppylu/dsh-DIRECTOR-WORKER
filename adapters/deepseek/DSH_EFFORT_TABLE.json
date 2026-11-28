@@ -1,0 +1,11 @@
+{
+  "mechanical": ["off", "low"],
+  "routine": ["low", "high"],
+  "dev": ["high"],
+  "ui": ["high"],
+  "root_cause": ["high", "max"],
+  "fix_after_fail": ["high", "max"],
+  "realism": ["high", "max"],
+  "core_engine": ["high", "max"],
+  "repeated_failure": ["max"]
+}

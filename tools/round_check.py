@@ -18,17 +18,17 @@ change) and `DECISION:` lines. A defect without a FIX_ROUNDS line is not checked
 names both, e.g. `| item | test conditions | reference conditions |`, with at least one row): a study that never
 compares how the test ran with how the reference ran keeps fixing the wrong thing. A section without it prints
 `~ WARN NO_CONDITIONS_TABLE` (a warning in 2.3.0, not a FAIL).
-2.5.0 (2.5.0-ds.6): from the 2nd failed set on, the same worker trying again is not enough. The study section for SET 2
-(and every later set) names an independent diagnosis and its result: `DIAGNOSIS_BY:` (a different reviewer, read-only:
-the diagnoser does not implement; on DSH another subagent session, another DeepSeek model when DSH offers one, or a
-person) and `DIAGNOSIS_RESULT:`. When the section also names `IMPLEMENTER:`, the two must differ. Missing or the same
-prints `~ WARN NO_INDEPENDENT_DIAGNOSIS` (a warning, not a FAIL).
+2.5.0: from the 2nd failed set on, the same worker trying again is not enough. The study section for SET 2 (and every
+later set) names an independent diagnosis and its result: `DIAGNOSIS_BY:` (a different reviewer or model, read-only:
+the diagnoser does not implement) and `DIAGNOSIS_RESULT:`. When the section also names `IMPLEMENTER:`, the two must
+differ. Missing or the same prints `~ WARN NO_INDEPENDENT_DIAGNOSIS` (a warning, not a FAIL).
 
   round_check.py [--dir DIR]          every RESUME_STATE*.md in DIR (default: the current folder)
   round_check.py --resume FILE ...    these files
 
 Prints OK / FAIL per defect and a last line `ROUNDS: PASS|FAIL files=n defects=n failed=n`; exit 1 on any FAIL or
-when no RESUME_STATE is found. Only reads. A project's guard_check runs it for each worktree (docs/06b).
+when no RESUME_STATE is found. 3.0.0 (G2): an empty RESUME_STATE or one that is not UTF-8 text is FAIL (INVALID), not
+"no FIX_ROUNDS field". Only reads. A project's guard_check runs it for each worktree (docs/06b).
 """
 import argparse
 import pathlib
@@ -111,8 +111,7 @@ def diagnosis_warnings(section, where):
     empty = [k for k in ("DIAGNOSIS_BY", "DIAGNOSIS_RESULT") if not filled_line(section, k)]
     if empty:
         return [f"~ WARN NO_INDEPENDENT_DIAGNOSIS {where}: {', '.join(empty)} empty or missing (after the 2nd failed "
-                "set, a different reviewer (another session or model, or a person) diagnoses read-only and writes what "
-                "it found; it does not implement)"]
+                "set, a different reviewer or model diagnoses read-only and writes what it found; it does not implement)"]
     by, implementer = line_value(section, "DIAGNOSIS_BY"), line_value(section, "IMPLEMENTER")
     if implementer and by.lower() == implementer.lower():
         return [f"~ WARN NO_INDEPENDENT_DIAGNOSIS {where}: DIAGNOSIS_BY is the IMPLEMENTER ({by}); the diagnosis must "
@@ -156,6 +155,18 @@ def check_defect(defect, fields, folder):
     return problems
 
 
+def unreadable(path):
+    """3.0.0 (G2): why a RESUME_STATE gives no result (empty, or not UTF-8 text), or None when it can be read."""
+    raw = path.read_bytes()
+    if not raw.strip():
+        return "INVALID empty file: nothing to check"
+    try:
+        raw.decode("utf-8-sig")
+    except UnicodeDecodeError as error:
+        return f"INVALID not UTF-8 text ({error.reason} at byte {error.start}); save it as UTF-8 and run again"
+    return None
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dir", default=".", help="folder whose RESUME_STATE*.md files are checked (default: current)")
@@ -172,7 +183,12 @@ def main(argv=None):
             failed += 1
             print(f"FAIL {f}: file not found")
             continue
-        rows = fix_rounds(f.read_text(encoding="utf-8-sig", errors="replace"))
+        problem = unreadable(f)
+        if problem:  # 3.0.0 (G2): a file that cannot be read gives no result, so it is never OK
+            failed += 1
+            print(f"FAIL {f}: {problem}")
+            continue
+        rows = fix_rounds(f.read_text(encoding="utf-8-sig"))
         if rows is None:
             print(f"OK   {f}: no FIX_ROUNDS field")
             continue

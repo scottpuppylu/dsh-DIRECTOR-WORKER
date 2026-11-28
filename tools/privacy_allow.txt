@@ -1,0 +1,6 @@
+# privacy_scan.py allow list: <rule>: <regex> | <reason>. Every entry needs a reason; keep this list short.
+# Only these kinds belong here (3.0.0 privacy ruling): the public repo URL, the test mail domains, and the DW series'
+# own public names. Anything else is fixed in the file (write <WS> for the workspace), not allowed here.
+owner_handle: https://github\.com/scottpuppylu/[A-Za-z0-9._-]+ | 公開 repo 網址（README 的開場提示要貼這個網址）
+email: [A-Za-z0-9._%+-]+@(?:[A-Za-z0-9-]+\.)*example\.(?:invalid|com)(?![A-Za-z0-9-]) | 測試網域 example.invalid 和 example.com，不會是真信箱
+user_folder: /home/dw(?![A-Za-z0-9_.-]) | DW 容器映像自己的帳號 dw（DW 系列的公開代號），不是主機使用者的資料夾

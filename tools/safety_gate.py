@@ -1,35 +1,56 @@
 #!/usr/bin/env python3
-"""Safety gates of a work order (2.2.5-ds.5; was sdd_gate.py of ds.2-ds.4). Only reads.
+"""Safety gates of a work order (3.0.0 D1; merged from the dshdw ds.7 and agydw safety_gate.py). Only reads.
 
-2.2.5-ds.5 (WO-DS-009 B1, revision 3): the OpenSpec layer of ds.2-ds.4 is removed (CLI lookup / install / init,
-`openspec validate` / `archive`, SPEC_CHANGE, openspec_bin, require_spec_for_*). The safety gates it carried do not need
-OpenSpec and stay, under the top-level "safety" block of director_work.json (all on when missing; docs/13):
+gate_check.py --order and --match load this file by path. Only Standard and Strict orders are gated; Direct is not.
 
-  tests_first                true  Standard/Strict orders carry TESTS_LOCKED (`- NONE  # why` for docs-only work);
-                                   a locked test whose sha256 changed fails (gate_check --order / --match)
-  plan_gate                  true  the worker hands in <WORK_DIR>/<WO>/PLAN.md (`- [ ] 1.1 ...`) before any code;
-                                   --match with --dispatch-log needs `PLAN_APPROVED <WO> sha=<plan hash>`, the plan may
-                                   only differ from the approved one by ticked boxes, and every task is ticked
-  spec_review_for_standard   true  a Standard order needs its SPEC_REVIEW too (Strict always does)
-  stop_after_rounds          1     STOP_RULES of a Standard/Strict order may not allow more rounds than this
-  prefer_auto                true  a note when a Standard/Strict order has no AUTO criterion (a hint, not a gate)
+Strength: "strength" in director_work.json ("light" | "standard" | "strict", default "standard") sets which gates are
+on. The "safety" block may turn single switches on or tighten them on top of that:
+(3.0.0 B15) A variant sets its own default in adapters/<name>/VARIANT.json beside the tools folder, as
+{"default_strength": "light"} (dshdw: SPEC_VARIANTS_300 default light); the rules checkout and an installed DIRECTOR/
+have the same layout (tools/ and adapters/<name>/ side by side). The default then counts as "standard" does below
+(no PO answer needed for it). A VARIANT.json that cannot be read, a value that is not a strength, or two files that
+disagree is a problem (the gates fail) and the default stays "standard"; no VARIANT.json key: "standard".
 
-No self-loosening: for a Standard/Strict order, tests_first / plan_gate / spec_review_for_standard set to false, or
-stop_after_rounds set to 0 / false or raised above 1, fails `gate_check --order` unless a PO_PENDING entry naming that
-switch is answered by the PO (the 2.2.3-ds.3 rule for require_spec, WO-DS-004 lesson). prefer_auto off is only a note.
+  switch                     light  standard  strict  what it does
+  tests_first                off    on        on      the order carries TESTS_LOCKED (`- NONE  # why` for docs-only
+                                                      work); a locked test whose sha256 changed fails --order, and
+                                                      with --match --candidate the file is read from the candidate
+                                                      commit (git cat-file), so an edit committed by the worker fails
+  plan_gate                  off    off       on      --match with --dispatch-log needs `PLAN_APPROVED <WO> sha=<64>`;
+                                                      <WORK_DIR>/<WO>/PLAN.md may only differ from it by ticked boxes,
+                                                      and every task is ticked
+  spec_review_for_standard   off    off       on      --match needs the order's SPEC_REVIEW (log line or reviews/ file)
+  stop_after_rounds          0      0         1       STOP_RULES may not allow more rounds than this (0 = not checked)
+  prefer_auto                off    off       on      a note when no acceptance criterion is AUTO (a hint, not a gate)
 
-Also here: "order_limits" (max_files_per_order 3, max_lines_per_order 200, max_test_lines_per_order 400; 0 = off) and
-"protected_tests" (globs of test files a worker may only add to), both read by scope_check.py.
+No self-loosening (hard line): a worker may not turn these off. For a Standard / Strict order, each of these fails
+unless a PO_PENDING.md entry naming it is answered or closed with an ANSWER (the PO decided):
+  - "strength" below the default strength ("standard"; that is, "light");
+  - a switch in "safety" looser than its strength's value (on -> off, stop_after_rounds 0 or raised above it).
+A strength or switch value of the wrong type ("strength": "lite", "tests_first": "no", stop_after_rounds -1 or true),
+or a director_work.json that cannot be read, also fails: the gate never guesses towards weaker.
 
-An old "sdd" block is read without error (legacy_notes() gives its WARN lines): its safety switches still count, with
-「請搬到 safety」 (a key also in "safety" is ignored); openspec_bin, require_spec_for_* and any other key are ignored
-with 「OpenSpec 已在 2.2.5-ds.5 移除，此鍵被忽略」; old sdd.max_*_per_order still count with a shadow WARN
-「請搬到 order_limits」 (2.2.4-ds.4). The ds.4 code with OpenSpec is at tag v2.2.4-ds.4.
+TESTS_LOCKED lines: `- <path> sha256=<64 hex>`; the path may hold spaces and may be quoted ("…", '…' or `…`), as
+--lock-tests prints it for a path with spaces. The 2.2.3 one-line form `TESTS_LOCKED: <path> sha256=<64 hex>` (one
+line per file) is read too. The hash reads CRLF as LF.
+
+3.0.0 B4 (Director decision; from agydw and dshdw ds.4 B1 / B5, read by scope_check.py): the size limits and the
+protected tests, checked only when something declares them, at every strength (light, standard, strict alike):
+  - size: the order's `ORDER_LIMITS = files=<n> lines=<n> test_lines=<n>` line (any governance; each word optional),
+    and, for a Standard / Strict order, the top-level "order_limits" block of director_work.json
+    (max_files_per_order, max_lines_per_order, max_test_lines_per_order); a word of the order line wins over the
+    block, a limit nobody sets is off, 0 is off. Nothing declared: no size check (agydw / dshdw had defaults 3 / 200 /
+    400; their director_work.example.json declares the block, so a project made from it keeps the check).
+  - protected: the order's TESTS_LOCKED files and the "protected_tests" globs of director_work.json may only be added
+    or grow at their end. Neither: no check.
+  A limit that is not a whole number 0 or more, an unknown key, or a "protected_tests" that is not a list of strings
+  is a problem (scope_check.py: NOT_RUN), never a guess towards weaker. The old "sdd" block is not ported.
 
 CLI:
   safety_gate.py --lock-tests FILE ... [--repo DIR]   print the `TESTS_LOCKED:` list to paste into the order
   safety_gate.py --plan-hash PLAN_MD --order WO.md    print the `PLAN_APPROVED` line for DIRECTOR_LOG
-Exit 0 done, 1 a file is missing.
+  safety_gate.py --show [--config director_work.json] print the strength and the switches in force
+Exit 0 done, 1 a file is missing or the config is invalid, 2 usage.
 """
 import argparse
 import hashlib
@@ -39,125 +60,174 @@ import re
 import subprocess
 import sys
 
-DEFAULTS = {
-    "spec_review_for_standard": True,
-    "tests_first": True,
-    "plan_gate": True,
-    "stop_after_rounds": 1,
-    "prefer_auto": True,
+STRENGTHS = {
+    "light": {"tests_first": False, "plan_gate": False, "spec_review_for_standard": False, "stop_after_rounds": 0,
+              "prefer_auto": False},
+    "standard": {"tests_first": True, "plan_gate": False, "spec_review_for_standard": False, "stop_after_rounds": 0,
+                 "prefer_auto": False},
+    "strict": {"tests_first": True, "plan_gate": True, "spec_review_for_standard": True, "stop_after_rounds": 1,
+               "prefer_auto": True},
 }
-SWITCHES = tuple(DEFAULTS)
+ORDER = ("light", "standard", "strict")
+BASE_DEFAULT = "standard"
+VARIANT_FILE = "VARIANT.json"  # 3.0.0 B15: adapters/<name>/VARIANT.json {"default_strength": ...}
+
+
+def variant_default(tools_dir=None):
+    """3.0.0 B15 (dsh report): (strength, source, problems) of the default strength. adapters/*/VARIANT.json next to
+    the tools folder may set "default_strength"; none sets it: ("standard", None, []). A file that cannot be read, a
+    value that is not one of light / standard / strict, or two files that disagree: ("standard", None, [problem])."""
+    folder = pathlib.Path(tools_dir) if tools_dir else pathlib.Path(__file__).resolve().parent
+    found, problems = {}, []
+    for path in sorted(folder.parent.glob("adapters/*/" + VARIANT_FILE)):
+        name = path.relative_to(folder.parent).as_posix()
+        try:
+            data = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, UnicodeError, ValueError) as error:
+            problems.append(f"SAFETY variant default: {name} cannot be read ({type(error).__name__}); the default "
+                            f"stays {BASE_DEFAULT}")
+            continue
+        if not isinstance(data, dict):
+            problems.append(f"SAFETY variant default: {name} is not a JSON object; the default stays {BASE_DEFAULT}")
+        elif "default_strength" in data and data["default_strength"] not in STRENGTHS:
+            problems.append(f"SAFETY variant default: {name} default_strength {data['default_strength']!r} is not one "
+                            f"of {' / '.join(ORDER)}; the default stays {BASE_DEFAULT}")
+        elif "default_strength" in data:
+            found[name] = data["default_strength"]
+    if len(set(found.values())) > 1:
+        problems.append("SAFETY variant default: " + ", ".join(f"{n} says {v}" for n, v in found.items())
+                        + f": they disagree; the default stays {BASE_DEFAULT}")
+    if problems or not found:
+        return BASE_DEFAULT, None, problems
+    name = next(iter(found))
+    return found[name], name, []
+
+
+DEFAULT_STRENGTH, DEFAULT_SOURCE, DEFAULT_PROBLEMS = variant_default()
+SWITCHES = tuple(STRENGTHS["strict"])
 GOVERNED = ("Standard", "Strict")
-LOG_PREFIX = r"(?:\d{4}-\d{2}-\d{2}[^|\n`]*\|[ \t]*)?"
-LIMIT_KEYS = ("max_files_per_order", "max_lines_per_order")
-LIMIT_DEFAULTS = {"max_files_per_order": 3, "max_lines_per_order": 200, "max_test_lines_per_order": 400}
+LIMIT_KEYS = ("max_files_per_order", "max_lines_per_order", "max_test_lines_per_order")  # 3.0.0 B4
+LIMIT_WORDS = ("files", "lines", "test_lines")  # the ORDER_LIMITS words, in the same order
 TEST_FILE = re.compile(r"(?:^|/)(?:tests/|test_[^/]*\.py$|[^/]*_test\.py$)")
-LEGACY_KEY = "sdd"
-REMOVED_WARN = "OpenSpec 已在 2.2.5-ds.5 移除，此鍵被忽略"
-MOVE_WARN = "請搬到 safety"
+
+
+def find_config(order_path=None, config_path=None):
+    """--config, else director_work.json in the order's folder or the one above it (DIRECTOR/orders/WO.md ->
+    DIRECTOR/director_work.json), else None."""
+    if config_path:
+        return pathlib.Path(config_path)
+    if order_path is None:
+        return None
+    folder = pathlib.Path(order_path).resolve().parent
+    return next((f / "director_work.json" for f in (folder, folder.parent) if (f / "director_work.json").is_file()),
+                None)
 
 
 def load_config(order_path=None, config_path=None):
-    """(switches, problem or None). config_path, else <order folder>/../director_work.json when it exists. Missing
-    file or keys: the defaults (all gates on). Private keys: _dir, _legacy_safety, _legacy_shadowed, _legacy_removed,
-    _legacy_empty, _legacy_limits, _order_limits, _protected_tests."""
-    config = dict(DEFAULTS)
-    path = pathlib.Path(config_path) if config_path else None
-    if path is None and order_path is not None:
-        guess = pathlib.Path(order_path).resolve().parent.parent / "director_work.json"
-        path = guess if guess.is_file() else None
+    """(config, problems). config: "strength", every switch, "_set" (the switches the "safety" block sets), "_dir" (the
+    folder of director_work.json, for PO_PENDING.md), "_path". A missing file is the default strength; a file that
+    cannot be read, a strength or a switch of the wrong type is a problem and the value stays at its strength's."""
+    path = find_config(order_path, config_path)
+    config = {"strength": DEFAULT_STRENGTH, **STRENGTHS[DEFAULT_STRENGTH], "_set": [], "_dir": None, "_path": None}
     if path is None:
-        return config, None
-    config["_dir"] = str(path.resolve().parent)  # the DIRECTOR folder, for PO_PENDING.md and DIRECTOR_LOG.md
+        return config, list(DEFAULT_PROBLEMS)  # 3.0.0 B15: a broken VARIANT.json fails even without a config
+    config["_dir"], config["_path"] = str(path.resolve().parent), path.as_posix()
     try:
         data = json.loads(path.read_text(encoding="utf-8-sig"))
-    except (OSError, ValueError) as error:
-        return config, f"director_work.json {path}: cannot read ({error}); the defaults (all gates on) are used"
+    except (OSError, UnicodeError, ValueError) as error:
+        return config, [*DEFAULT_PROBLEMS, f"SAFETY config: {path.as_posix()} cannot be read ({type(error).__name__}); "
+                                           f"the gates stay at strength {DEFAULT_STRENGTH}"]
     if not isinstance(data, dict):
-        return config, f"director_work.json {path}: not a JSON object; the defaults (all gates on) are used"
-    return from_data(data, config), None
+        return config, [*DEFAULT_PROBLEMS, f"SAFETY config: {path.as_posix()} is not a JSON object"]
+    return from_data(data, config)
 
 
 def from_data(data, config=None):
-    """The switches of a parsed director_work.json (a dict) laid over config (default: DEFAULTS)."""
-    config = dict(DEFAULTS) if config is None else config
-    safety = data.get("safety") if isinstance(data.get("safety"), dict) else {}
-    legacy = data.get(LEGACY_KEY)
-    if isinstance(legacy, dict) or LEGACY_KEY in data:
-        legacy = legacy if isinstance(legacy, dict) else {}
-        moved = {key: value for key, value in legacy.items() if key in SWITCHES and key not in safety}
-        config.update(moved)
-        config["_legacy_safety"] = sorted(moved)
-        config["_legacy_shadowed"] = sorted(key for key in legacy if key in SWITCHES and key in safety)
-        config["_legacy_removed"] = sorted(key for key in legacy if key not in SWITCHES
-                                           and key not in LIMIT_KEYS)
-        config["_legacy_limits"] = {key: legacy[key] for key in LIMIT_KEYS if key in legacy}
-        config["_legacy_empty"] = not legacy
-    config.update({key: value for key, value in safety.items() if key in SWITCHES})
-    limits = data.get("order_limits")
-    if isinstance(limits, dict):
-        config["_order_limits"] = {key: value for key, value in limits.items()
-                                   if key in LIMIT_KEYS + ("max_test_lines_per_order",)}
-    protected = data.get("protected_tests")
-    if isinstance(protected, list):
-        config["_protected_tests"] = [str(item) for item in protected if str(item).strip()]
-    return config
-
-
-def legacy_notes(config):
-    """The WARN lines for an old "sdd" block (none without one): its removed OpenSpec keys, and its safety switches
-    that still count (請搬到 safety) or are shadowed by "safety". The limits WARN comes from order_limits()."""
-    out = []
-    removed = config.get("_legacy_removed") or []
-    if removed:
-        out.append(f"WARN: {REMOVED_WARN}：" + "、".join(f"sdd.{key}" for key in removed))
-    moved = config.get("_legacy_safety") or []
-    if moved:
-        out.append("WARN: " + "、".join(f"sdd.{key}" for key in moved) + f" 照讀，{MOVE_WARN}"
-                   "（director_work.json 頂層 \"safety\"）")
-    shadowed = config.get("_legacy_shadowed") or []
-    if shadowed:
-        out.append("WARN: " + "、".join(f"sdd.{key}" for key in shadowed) + " 被忽略（\"safety\" 裡已有同名的鍵）；"
-                   "把它從 sdd 區塊刪掉")
-    if config.get("_legacy_empty"):
-        out.append("WARN: director_work.json 的 \"sdd\" 區塊是空的，2.2.5-ds.5 起沒有作用，可以刪掉（安全開關在 \"safety\"）")
-    return out
+    """(config, problems) of a parsed director_work.json laid over the default strength."""
+    config = config or {"strength": DEFAULT_STRENGTH, **STRENGTHS[DEFAULT_STRENGTH], "_set": [], "_dir": None,
+                        "_path": None}
+    problems = list(DEFAULT_PROBLEMS)  # 3.0.0 B15
+    strength = data.get("strength", DEFAULT_STRENGTH)
+    if strength not in STRENGTHS:
+        problems.append(f"SAFETY strength: {strength!r} is not one of {' / '.join(ORDER)}; the gates stay at "
+                        f"{DEFAULT_STRENGTH}")
+        strength = DEFAULT_STRENGTH
+    config.update({"strength": strength, **STRENGTHS[strength]})
+    safety = data.get("safety", {})
+    if not isinstance(safety, dict):
+        problems.append(f"SAFETY safety: must be a JSON object of switches, got {type(safety).__name__}")
+        safety = {}
+    for key, value in safety.items():
+        if key not in SWITCHES:
+            if not key.startswith("_"):
+                problems.append(f"SAFETY safety.{key}: not a switch ({', '.join(SWITCHES)})")
+            continue
+        if key == "stop_after_rounds":
+            good = isinstance(value, int) and not isinstance(value, bool) and value >= 0
+        else:
+            good = isinstance(value, bool)
+        if not good:
+            want = "a whole number, 0 or more" if key == "stop_after_rounds" else "true or false"
+            problems.append(f"SAFETY safety.{key}: {value!r} is not {want}; it stays {config[key]!r} ({strength})")
+            continue
+        config[key] = value
+        config["_set"].append(key)
+    limits = data.get("order_limits")  # 3.0.0 B4 (from agydw / dshdw ds.4 B1)
+    if limits is not None and not isinstance(limits, dict):
+        problems.append(f"SAFETY order_limits: must be a JSON object of limits, got {type(limits).__name__}")
+    elif limits is not None:
+        config["_order_limits"] = {}
+        for key, value in limits.items():
+            if key.startswith("_"):
+                continue
+            if key not in LIMIT_KEYS:
+                problems.append(f"SAFETY order_limits.{key}: not a limit ({', '.join(LIMIT_KEYS)})")
+            elif not (isinstance(value, int) and not isinstance(value, bool) and value >= 0):
+                problems.append(f"SAFETY order_limits.{key}: {value!r} is not a whole number, 0 or more")
+            else:
+                config["_order_limits"][key] = value
+    protected = data.get("protected_tests")  # 3.0.0 B4 (from agydw / dshdw ds.4 B5)
+    if protected is not None and not (isinstance(protected, list) and all(isinstance(g, str) for g in protected)):
+        problems.append(f"SAFETY protected_tests: must be a list of globs (strings), got {protected!r}"[:200])
+    elif protected is not None:
+        config["_protected_tests"] = [g.strip() for g in protected if g.strip()]
+    return config, problems
 
 
 def is_test_file(path):
-    """2.2.4-ds.4 (B1): a test file, counted apart from max_lines_per_order: test_*.py, *_test.py, or anything under
-    a tests/ folder."""
+    """3.0.0 B4 (dshdw ds.4 B1): a test file, whose lines count against the test-line limit: test_*.py, *_test.py, or
+    anything under a tests/ folder."""
     return bool(TEST_FILE.search(str(path).replace("\\", "/")))
 
 
-def order_limits(config, notes=None):
-    """2.2.4-ds.4 (B1, WO-DS-006 #8): (max files, max non-test lines, max test lines) of one order. Read from the
-    top-level `order_limits` block of director_work.json first. An old `sdd.max_*_per_order` key still works but
-    leaves a shadow WARN 「請搬到 order_limits」; when both are set, order_limits wins and the WARN says the sdd key
-    is ignored. 0 turns a limit off."""
-    new = config.get("_order_limits") or {}
-    old = config.get("_legacy_limits") or {}
-    values = []
-    for key in LIMIT_KEYS + ("max_test_lines_per_order",):
-        if key in new:
-            value = new[key]
-            if key in old and notes is not None:
-                notes.append(f"SHADOW WARN: sdd.{key}={old[key]} is ignored (order_limits.{key}={value} wins); "
-                             f"remove it from the sdd block")
-        elif key in old:
-            value = old[key]
-            if notes is not None:
-                notes.append(f"SHADOW WARN: sdd.{key}={value} is the old place; 請搬到 order_limits "
-                             f"(director_work.json top-level \"order_limits\": {{\"{key}\": {value}}})")
-        else:
-            value = LIMIT_DEFAULTS[key]
-        try:
-            values.append(int(value or 0))
-        except (TypeError, ValueError):
-            values.append(LIMIT_DEFAULTS[key])
-            if notes is not None:
-                notes.append(f"SHADOW WARN: {key}={value!r} is not a number; the default {LIMIT_DEFAULTS[key]} is used")
-    return tuple(values)
+def order_limits(text, config):
+    """3.0.0 B4: (files, lines, test lines) one order may change, 0 = off; None when nothing declares a limit. The
+    order's ORDER_LIMITS words win over the director_work.json "order_limits" block, which counts for Standard / Strict
+    orders only (as in agydw). Raises ValueError for an ORDER_LIMITS word that is not `files|lines|test_lines=<n>`."""
+    line = field(text, "ORDER_LIMITS") or ""
+    words = {}
+    if line and not line.startswith("<"):  # `<...>` is the template's placeholder
+        for token in line.replace("，", " ").replace(",", " ").split():
+            key, eq, value = token.partition("=")
+            if not eq or key not in LIMIT_WORDS or not value.isdigit():
+                raise ValueError(f"ORDER_LIMITS: `{token}` is not files=<n>, lines=<n> or test_lines=<n>")
+            words[key] = int(value)
+    block = (config.get("_order_limits") or {}) if governance(text) in GOVERNED else {}
+    if not words and not block:
+        return None
+    values = tuple(words.get(word, block.get(key, 0)) for word, key in zip(LIMIT_WORDS, LIMIT_KEYS))
+    return values if any(values) else None
+
+
+def protected_paths(text, config):
+    """3.0.0 B4: (the order's TESTS_LOCKED paths, the "protected_tests" globs); `- NONE` locks nothing."""
+    locked = [parsed[0].replace("\\", "/") for parsed in map(locked_path, locked_items(text) or []) if parsed]
+    return locked, list(config.get("_protected_tests") or [])
+
+
+def on(config, key):
+    value = config.get(key)
+    return bool(value) and not (key == "stop_after_rounds" and value == 0)
 
 
 def governance(text):
@@ -169,6 +239,9 @@ def field(text, key):
     """The value of a `KEY = value` line without a trailing ` # comment`; None when absent."""
     m = re.search(rf"^[ \t]*{key}[ \t]*=[ \t]*(.*)$", text, re.M)
     return re.split(r"\s+#", m.group(1))[0].strip() if m else None
+
+
+NONE_WHY = re.compile(r"^[ 	]*(?:-[ 	]+|TESTS_LOCKED[ 	]*[:：=][ 	]*)NONE[ 	]+#[ 	]*\S", re.M)
 
 
 def list_items(text, key):
@@ -192,13 +265,16 @@ def bytes_hash(data):
 
 
 def file_hash(path):
-    """sha256 of a text file with CRLF read as LF, so a checkout's line endings do not change it."""
-    return hashlib.sha256(pathlib.Path(path).read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+    return bytes_hash(pathlib.Path(path).read_bytes())
 
 
 def _git_blob(repo, rev, rel_path):
     """Bytes of rel_path at git revision rev, or None if unavailable."""
-    done = subprocess.run(["git", "-C", str(repo), "cat-file", "blob", f"{rev}:{rel_path}"], capture_output=True)
+    try:
+        done = subprocess.run(["git", "-C", str(repo), "cat-file", "blob", f"{rev}:{rel_path}"], capture_output=True,
+                              timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return None
     return done.stdout if done.returncode == 0 else None
 
 
@@ -219,7 +295,10 @@ def po_entries(director):
     path = pathlib.Path(director) / "PO_PENDING.md" if director else None
     if path is None or not path.is_file():
         return []
-    text = path.read_text(encoding="utf-8-sig")
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeError):
+        return []
     starts = [m.start() for m in PO_ID.finditer(text)] + [len(text)]
     entries = []
     for begin, end in zip(starts, starts[1:]):
@@ -236,187 +315,130 @@ def po_decided(director, word):
     still open, None when none names it."""
     found = None
     for status, answer, block in po_entries(director):
-        if word.lower() in block.lower():
+        if re.search(rf"(?<![\w.]){re.escape(word)}(?!\w)", block, re.I):
             if status in ("answered", "closed") and answer and not re.fullmatch(r"[-—–]|<[^<>]*>|TBD|待\S*", answer):
                 return "answered"
             found = "open"
     return found
 
 
-def is_off(value):
-    return value is False or value == 0 or value is None
+def loosening(config):
+    """[(word, what)] of each way config is looser than the default strength's gates: the strength itself below
+    standard, and each switch the "safety" block set looser than its strength's value."""
+    out = []
+    strength = config.get("strength", DEFAULT_STRENGTH)
+    if ORDER.index(strength) < ORDER.index(DEFAULT_STRENGTH):
+        out.append(("strength", f"strength is {strength} (below {DEFAULT_STRENGTH})"))
+    base = STRENGTHS[strength]
+    for key in config.get("_set", []):
+        value, want = config[key], base[key]
+        if key == "stop_after_rounds":
+            if want and (value == 0 or value > want):
+                out.append((key, f"safety.{key} is {value} ({strength} has {want})"))
+        elif want and not value:
+            out.append((key, f"safety.{key} is off ({strength} has it on)"))
+    return out
 
 
-def loosening(key, value):
-    """How a switch is looser than its default: 'off' (false / 0), 'raised' (stop_after_rounds above 1), else None."""
-    if is_off(value):
-        return "off"
-    if key == "stop_after_rounds" and not isinstance(value, bool):
-        try:
-            rounds = int(value)
-        except (TypeError, ValueError):
-            return None
-        if rounds > DEFAULTS[key]:
-            return "raised"
-    return None
-
-
-def switch_off_problems(config, gov, notes):
-    """2.2.5-ds.5 (B1): a safety gate loosened for a Standard/Strict order (a switch off, or stop_after_rounds raised
-    above 1) needs the PO's answer: a PO_PENDING entry naming the switch, answered or closed with an ANSWER. Open or
-    missing: a problem (the lead may not loosen a gate by itself; WO-DS-004 wrote its own DD to do that). prefer_auto is
-    a hint, not a gate: off is a note (總監 ruling 2026-11-15)."""
+def loosening_problems(config, gov, notes):
+    """A gate loosened for a Standard / Strict order needs the PO's answer in PO_PENDING.md; prefer_auto off is only a
+    note (a hint, not a gate)."""
     problems = []
-    director = config.get("_dir")
-    for key in SWITCHES:
-        if key == "spec_review_for_standard" and gov != "Standard":
+    for word, what in loosening(config):
+        if word == "prefer_auto":
+            notes.append(f"{what}: no note about a missing AUTO criterion (a hint, not a gate)")
             continue
-        how = loosening(key, config.get(key))
-        if how is None:
-            continue
-        if key == "prefer_auto":
-            notes.append("safety.prefer_auto is off: no note about a missing AUTO criterion (a hint, not a gate)")
-            continue
-        state = "is off" if how == "off" else f"is raised to {config.get(key)} (default {DEFAULTS[key]})"
-        decided = po_decided(director, key)
+        decided = po_decided(config.get("_dir"), word)
         if decided == "answered":
-            notes.append(f"safety.{key} {state}; the PO answered it in PO_PENDING.md")
+            notes.append(f"{what}; the PO answered it in PO_PENDING.md")
             continue
         wait = "the PO_PENDING entry is still open: wait for the PO" if decided == "open" else (
-            f"write a PO_PENDING entry naming {key} and wait for the PO's answer")
-        problems.append(f"safety.{key} {state} for a {gov} order; the lead may not loosen a safety gate (docs/13 "
-                        f"「誰能關」): set it back, or {wait}")
+            f"write a PO_PENDING entry naming {word} and wait for the PO's answer")
+        problems.append(f"SAFETY: {what} for a {gov} order; a worker may not turn a safety gate off: set it back, "
+                        f"or {wait}")
     return problems
+
+
+def locked_path(item):
+    """(path, sha) of one TESTS_LOCKED item, or None. The path may hold spaces and be quoted (agydw)."""
+    m = re.fullmatch(r"(.+?)\s+sha256=([0-9a-fA-F]{64})", item)
+    if not m:
+        return None
+    rel = m.group(1).strip()
+    if len(rel) >= 2 and rel[0] == rel[-1] and rel[0] in "\"'`":
+        rel = rel[1:-1]
+    return (rel, m.group(2).lower()) if rel else None
+
+
+def locked_items(text):
+    """TESTS_LOCKED items: the block (`TESTS_LOCKED:` then `- <item>` lines) and the 2.2.3 one-line form
+    (`TESTS_LOCKED: <path> sha256=<64>`, one line per file, docs/02); None when the order has neither."""
+    items = list_items(text, "TESTS_LOCKED")
+    inline = [re.split(r"\s+#", m.group(1))[0].strip()
+              for m in re.finditer(r"^[ 	]*(?:-[ 	]+)?TESTS_LOCKED[ 	]*[:：=][ 	]*(\S.*)$", text, re.M)]
+    return None if items is None and not inline else (items or []) + inline
 
 
 def check_tests(text, repo, problems, notes, candidate=None):
     """TESTS_LOCKED: `- <path> sha256=<64 hex>` per acceptance test, written before dispatch. The lock is what stops a
-    worker from editing a test until it passes."""
-    items = list_items(text, "TESTS_LOCKED")
+    worker from editing a test until it passes. With candidate (dshdw ds.7) the file is read from that commit."""
+    items = locked_items(text)
     if items is None:
         problems.append("TESTS_LOCKED: missing; write the acceptance tests before dispatch, then paste the lines "
                         "`safety_gate.py --lock-tests <test files>` prints (or `- NONE  # why there is no test`)")
         return
-    if not items or items == ["NONE"]:
-        notes.append("TESTS_LOCKED: NONE; no locked acceptance test (fine for docs-only work)")
+    if not items:  # review P1-8: an empty lock locks nothing
+        problems.append("TESTS_LOCKED: empty; list the locked tests (`safety_gate.py --lock-tests <test files>`) or "
+                        "write `- NONE  # why there is no test`")
+        return
+    if items == ["NONE"]:  # docs-only work; the reason stays in the order for the reviewer
+        if not NONE_WHY.search(text):  # review P2-3
+            problems.append("TESTS_LOCKED: `NONE` needs its reason after `#` (`- NONE  # why there is no test`)")
         return
     for item in items:
-        m = re.fullmatch(r"(\S+)\s+sha256=([0-9a-fA-F]{64})", item)
-        if not m:
+        parsed = locked_path(item)
+        if parsed is None:
             problems.append(f"TESTS_LOCKED: `{item}` is not `<path> sha256=<64 hex>`")
             continue
+        rel, sha = parsed
         if candidate:
-            rel = m.group(1).replace("\\", "/")
-            blob = _git_blob(repo, candidate, rel)
+            blob = _git_blob(repo, candidate, rel.replace("\\", "/"))
             if blob is None:
-                problems.append(f"TESTS_LOCKED: {m.group(1)} not found in candidate {candidate[:12]} (deleted or missing)")
-            elif bytes_hash(blob) != m.group(2).lower():
-                problems.append(f"TESTS_LOCKED: {m.group(1)} changed in candidate {candidate[:12]} since it was locked; "
-                                "a worker may not edit the acceptance tests (report BLOCKED instead)")
+                problems.append(f"TESTS_LOCKED: {rel} not found in candidate {candidate[:12]} (deleted or missing)")
+            elif bytes_hash(blob) != sha:
+                problems.append(f"TESTS_LOCKED: {rel} changed in candidate {candidate[:12]} since it was locked; a "
+                                "worker may not edit the acceptance tests (report BLOCKED instead)")
             continue
-        path = pathlib.Path(repo) / m.group(1)
+        path = pathlib.Path(repo) / rel
         if not path.is_file():
-            problems.append(f"TESTS_LOCKED: {m.group(1)} not found under {pathlib.Path(repo).resolve()} (pass --repo)")
-        elif file_hash(path) != m.group(2).lower():
-            problems.append(f"TESTS_LOCKED: {m.group(1)} changed since it was locked; a worker may not edit the "
-                            "acceptance tests (report BLOCKED instead)")
+            problems.append(f"TESTS_LOCKED: {rel} not found under {pathlib.Path(repo).resolve().as_posix()} "
+                            "(pass --repo)")
+        elif file_hash(path) != sha:
+            problems.append(f"TESTS_LOCKED: {rel} changed since it was locked; a worker may not edit the acceptance "
+                            "tests (report BLOCKED instead)")
 
 
-def order_problems(text, order_path, repo, config, notes, candidate=None):
-    """The safety gates for one work order (gate_check.py --order and --match)."""
-    problems = []
+def order_problems(text, repo, config, notes, candidate=None):
+    """The safety gates of one Standard / Strict work order (gate_check.py --order and --match): loosening, locked
+    tests, the round limit and the AUTO hint. Direct orders: none."""
     gov = governance(text)
-    if field(text, "SPEC_CHANGE") is not None:
-        notes.append("SPEC_CHANGE: the field is ignored since 2.2.5-ds.5 (OpenSpec removed); write the spec into "
-                     "ACCEPTANCE and the boundary list of templates/WORK_ORDER.md E")
     if gov not in GOVERNED:
-        return problems
-    problems += switch_off_problems(config, gov, notes)
-    if not is_off(config.get("tests_first")):
+        return []
+    problems = loosening_problems(config, gov, notes)
+    if on(config, "tests_first"):
         check_tests(text, repo, problems, notes, candidate=candidate)
     limit = config.get("stop_after_rounds")
     stop = re.search(r"STOP_RULES\s*[:：=]\s*(.*)", text)
-    if not is_off(limit) and stop:
+    if on(config, "stop_after_rounds") and stop:
         rounds = [int(n) for n in re.findall(r"(\d+)\s*(?:輪|rounds?)", stop.group(1))]
         if not rounds:
             notes.append(f"STOP_RULES: no round count; write 「同一根因 {limit} 輪沒進展就停」")
-        elif max(rounds) > int(limit):
+        elif max(rounds) > limit:
             problems.append(f"STOP_RULES: allows {max(rounds)} rounds on one root cause; at most {limit} "
-                            "(safety.stop_after_rounds)")
-    if not is_off(config.get("prefer_auto")) and not re.search(r"^\|\s*AC-\d+\s*\|\s*AUTO\s*\|", text, re.M):
+                            f"(safety.stop_after_rounds, strength {config.get('strength')})")
+    if on(config, "prefer_auto") and not re.search(r"^\|\s*AC-\d+\s*\|\s*AUTO\s*\|", text, re.M):
         notes.append("acceptance: no AUTO criterion; prefer a condition a command can decide (safety.prefer_auto)")
     return problems
-
-
-def log_lines(log_text, event):
-    """(id, rest) of each whole-line `<event> <id> ...` in DIRECTOR_LOG, oldest first; lines inside fences skipped."""
-    out, fence = [], False
-    for line in log_text.splitlines():
-        if re.match(r" {0,3}(`{3,}|~{3,})", line):
-            fence = not fence
-            continue
-        m = None if fence else re.fullmatch(LOG_PREFIX + rf"{event}[ \t]+([^\s|`]+?)(?:\.md)?(?:[ \t]+(.*))?", line.strip())
-        if m:
-            out.append((m.group(1), m.group(2) or ""))
-    return out
-
-
-REVIEW_FIELDS = ("tokens=", "issues=", "adopted=")
-
-
-def review_fields_lacking(rest):
-    """The REVIEW_FIELDS (with "=") missing from the rest of a `SPEC_REVIEW <WO> ...` line. The one copy: gate_check
-    --sequence calls it too (2.2.5-ds.5 B7)."""
-    return [key for key in REVIEW_FIELDS if key not in (rest or "")]
-
-
-def review_sources(order_path, config):
-    """2.2.4-ds.4 (B4): where a spec review of an order may be found without --dispatch-log: DIRECTOR_LOG.md and
-    reviews/*SPEC_REVIEW* of the order's DIRECTOR folder (the folder of director_work.json, else orders/..)."""
-    folders = [pathlib.Path(config["_dir"])] if config.get("_dir") else []
-    if order_path is not None:
-        folders.append(pathlib.Path(order_path).resolve().parent.parent)
-    logs, reviews = [], []
-    for folder in dict.fromkeys(folders):
-        if (folder / "DIRECTOR_LOG.md").is_file():
-            logs.append(folder / "DIRECTOR_LOG.md")
-        if (folder / "reviews").is_dir():
-            reviews += sorted(p for p in (folder / "reviews").iterdir()
-                              if p.is_file() and "SPEC_REVIEW" in p.name.upper())
-    return logs, reviews
-
-
-def spec_review_problems(order_text, ids, log_text, config, notes, order_path):
-    """2.2.4-ds.4 (B4, WO-DS-006 #4): every Standard/Strict order handed in needs its spec review: the `SPEC_REVIEW
-    <WO>` line of --dispatch-log, else of the order's DIRECTOR_LOG.md, else a reviews/ file named after the order with
-    SPEC_REVIEW in its name. None: FAIL."""
-    wanted = {name.upper() for name in ids}
-    label = next(iter(ids), "the order")
-    looked = []
-    if log_text is not None:
-        sources = [("--dispatch-log", log_text)]
-    else:
-        logs, reviews = review_sources(order_path, config)
-        sources = [(path.as_posix(), path.read_text(encoding="utf-8-sig")) for path in logs]
-        for path in reviews:
-            upper = path.name.upper()
-            if any(re.search(rf"(?<![A-Z0-9-]){re.escape(name)}(?![0-9])", upper) for name in wanted):
-                notes.append(f"SPEC_REVIEW: review file {path.as_posix()} (no --dispatch-log; its line in "
-                             "DIRECTOR_LOG was not checked)")
-                return []
-        looked.append("reviews/*SPEC_REVIEW*")
-    for where, text in sources:
-        lines = [rest for name, rest in log_lines(text, "SPEC_REVIEW") if name.upper() in wanted]
-        if lines:
-            lacking = [key.rstrip("=") for key in review_fields_lacking(lines[-1])]
-            if lacking:
-                notes.append(f"SPEC_REVIEW: the line for {label} in {where} has no {'/'.join(lacking)}; write "
-                             f"`SPEC_REVIEW {label} tokens=<n|UNKNOWN> issues=<P0/P1/P2> adopted=<n>`")
-            return []
-        looked.insert(0, where)
-    return [f"SPEC_REVIEW: no `SPEC_REVIEW {label} tokens=... issues=... adopted=...` line (looked in: "
-            f"{', '.join(looked) or 'no --dispatch-log, no DIRECTOR_LOG.md'}); every Standard/Strict order is reviewed "
-            "before dispatch (templates/SPEC_REVIEW.md)"]
 
 
 def plan_path(order_text, ids, repo):
@@ -434,52 +456,62 @@ def plan_path(order_text, ids, repo):
     return None, f"{(base / names[0] / 'PLAN.md').as_posix()} not found"
 
 
-def match_problems(order_text, ids, log_text, repo, config, notes, order_path=None):
-    """--match: the spec review (with or without --dispatch-log) and, with --dispatch-log, the approved plan."""
-    problems = []
-    gov = governance(order_text)
-    if gov not in GOVERNED:
-        return problems
+def plan_problems(order_text, ids, approved, repo):
+    """plan_gate for --match with --dispatch-log. approved: the rest of each `PLAN_APPROVED <WO> ...` line of the
+    order, oldest first (gate_check reads the log)."""
     label = next(iter(ids), "the order")
-    if gov == "Strict" or not is_off(config.get("spec_review_for_standard")):
-        problems += spec_review_problems(order_text, ids, log_text, config, notes, order_path)
-    if log_text is None or is_off(config.get("plan_gate")):
-        return problems
-    wanted = {name.upper() for name in ids}
-    approved = [rest for name, rest in log_lines(log_text, "PLAN_APPROVED") if name.upper() in wanted]
     if not approved:
-        problems.append(f"PLAN_APPROVED: no `PLAN_APPROVED {label} sha=<64>` line in the dispatch log; the worker "
-                        "hands in <WORK_DIR>/<WO>/PLAN.md and the Director approves it before any code (safety.plan_gate)")
-        return problems
-    sha = re.search(r"\bsha=([0-9a-fA-F]{64})\b", approved[-1])
+        return [f"PLAN_APPROVED: no `PLAN_APPROVED {label} sha=<64>` line in the dispatch log; the worker hands in "
+                "<WORK_DIR>/<WO>/PLAN.md and the Director approves it before any code (safety.plan_gate)"]
+    sha = re.search(r"\bsha=([0-9a-fA-F]{64})\b", approved[-1] or "")
     plan, why = plan_path(order_text, ids, repo)
     if not sha:
-        problems.append("PLAN_APPROVED: the line has no sha=<64 hex> (safety_gate.py --plan-hash prints it)")
-    elif plan is None:
-        problems.append(f"PLAN_APPROVED: {why}; the approved plan cannot be compared")
-    elif plan_hash(plan) != sha.group(1).lower():
-        problems.append(f"PLAN_APPROVED: {plan.as_posix()} differs from the approved plan (more than ticked boxes); a "
-                        "changed plan goes back to the Director first")
-    else:  # handed in: every approved task is done; only a box holding `x` counts
-        open_tasks = re.findall(r"^\s*[-*]\s+\[(?!\s*[xX]\s*\])[^\]\n]*\]\s*(.*)$",
-                                plan.read_text(encoding="utf-8-sig"), re.M)
-        if open_tasks:
-            problems.append(f"PLAN_APPROVED: {len(open_tasks)} task(s) in PLAN.md not ticked, e.g. "
-                            f"{open_tasks[0].strip()[:80]}; finish them or report PARTIAL")
-    return problems
+        return ["PLAN_APPROVED: the line has no sha=<64 hex> (safety_gate.py --plan-hash prints it)"]
+    if plan is None:
+        return [f"PLAN_APPROVED: {why}; the approved plan cannot be compared"]
+    if plan_hash(plan) != sha.group(1).lower():
+        return [f"PLAN_APPROVED: {plan.as_posix()} differs from the approved plan (more than ticked boxes); a changed "
+                "plan goes back to the Director first"]
+    open_tasks = re.findall(r"^\s*[-*]\s+\[(?!\s*[xX]\s*\])[^\]\n]*\]\s*(.*)$", plan.read_text(encoding="utf-8-sig"),
+                            re.M)
+    if open_tasks:
+        return [f"PLAN_APPROVED: {len(open_tasks)} task(s) in PLAN.md not ticked, e.g. {open_tasks[0].strip()[:80]}; "
+                "finish them or report PARTIAL"]
+    return []
 
 
-def main():
+def lock_line(rel, digest):
+    """One TESTS_LOCKED item; a path with a space is quoted."""
+    return f'- "{rel}" sha256={digest}' if re.search(r"\s", rel) else f"- {rel} sha256={digest}"
+
+
+def main(argv=None):
     sys.stdout.reconfigure(encoding="utf-8")  # before parse_args: --help prints during parsing
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--lock-tests", nargs="+", metavar="FILE", help="print TESTS_LOCKED lines (paths relative to --repo)")
     ap.add_argument("--plan-hash", metavar="PLAN_MD", help="print the PLAN_APPROVED line for this PLAN.md")
     ap.add_argument("--order", help="with --plan-hash: the work order the plan belongs to")
     ap.add_argument("--repo", default=".", help="the project checkout (default: current folder)")
-    a = ap.parse_args()
-    if not (a.lock_tests or a.plan_hash):
-        ap.error("give --lock-tests or --plan-hash")
+    ap.add_argument("--show", action="store_true", help="print the strength and switches of --config")
+    ap.add_argument("--config", metavar="director_work.json", help="with --show (default: none, the defaults)")
+    a = ap.parse_args(argv)
+    if not (a.lock_tests or a.plan_hash or a.show):
+        ap.error("give --lock-tests, --plan-hash or --show")
     status = 0
+    if a.show:
+        if a.config and not pathlib.Path(a.config).is_file():
+            print(f"SAFETY: NOT_RUN config not found: {a.config}")
+            return 1
+        config, problems = load_config(None, a.config)
+        print(f"SAFETY strength={config['strength']} " + " ".join(f"{key}={json.dumps(config[key])}" for key in SWITCHES))
+        if DEFAULT_SOURCE:  # 3.0.0 B15
+            print(f"  ~ default strength {DEFAULT_STRENGTH} from {DEFAULT_SOURCE} (the variant's default; the base "
+                  f"default is {BASE_DEFAULT})")
+        for problem in problems:
+            print(f"  - {problem}")
+        for word, what in loosening(config):
+            print(f"  ~ {what}: a Standard / Strict order needs a PO_PENDING answer naming {word}")
+        status = 1 if problems else 0
     if a.lock_tests:
         print("TESTS_LOCKED:")
         root = pathlib.Path(a.repo).resolve()
@@ -493,10 +525,10 @@ def main():
             try:
                 rel = path.resolve().relative_to(root).as_posix()
             except ValueError:
-                print(f"# outside --repo {root}: {name}")
+                print(f"# outside --repo {root.as_posix()}: {name}")
                 status = 1
                 continue
-            print(f"- {rel} sha256={file_hash(path)}")
+            print(lock_line(rel, file_hash(path)))
     if a.plan_hash:
         if not a.order or not pathlib.Path(a.order).is_file() or not pathlib.Path(a.plan_hash).is_file():
             print("PLAN_HASH: NOT_RUN give an existing --order and PLAN.md")

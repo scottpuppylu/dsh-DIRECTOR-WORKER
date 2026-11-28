@@ -1,4 +1,4 @@
-# SETTINGS MANIFEST — <TASK_ID> <擷取 / 審查名稱>（dshdw 2.5.0-ds.6，上游 DW 2.5.0）
+# SETTINGS MANIFEST — <TASK_ID> <擷取 / 審查名稱>（2.5.0）
 WRITTEN_AT: <YYYY-MM-DD HH:MM，用 ran_line.py --stamp 印，不手打；要早於 RUN_AT>
 RUN_AT: <實際執行的時間，從執行紀錄抄，不手打>
 CANDIDATE: <commit 40 位 或 檔案 + sha256>

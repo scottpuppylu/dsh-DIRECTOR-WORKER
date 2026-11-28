@@ -1,0 +1,17 @@
+{"createdAt": 1700000000000, "cwd": "/home/dw/fixture", "id": "session-fx-poll_neg", "seq": 0, "time": 1700000000000, "type": "session"}
+{"data": {"arguments": {}, "name": "list_agents", "subCallId": "s1"}, "seq": 1, "time": 1700000001000, "type": "tool/ptc-dispatch-start"}
+{"data": {"arguments": {}, "content": [{"text": "w1 running step 0", "type": "text"}], "isError": false, "name": "list_agents", "subCallId": "s1"}, "seq": 2, "time": 1700000002000, "type": "tool/ptc-dispatch"}
+{"data": {"arguments": {}, "name": "list_agents", "subCallId": "s3"}, "seq": 3, "time": 1700000003000, "type": "tool/ptc-dispatch-start"}
+{"data": {"arguments": {}, "content": [{"text": "w1 running step 1", "type": "text"}], "isError": false, "name": "list_agents", "subCallId": "s3"}, "seq": 4, "time": 1700000004000, "type": "tool/ptc-dispatch"}
+{"data": {"arguments": {}, "name": "list_agents", "subCallId": "s5"}, "seq": 5, "time": 1700000005000, "type": "tool/ptc-dispatch-start"}
+{"data": {"arguments": {}, "content": [{"text": "w1 running step 2", "type": "text"}], "isError": false, "name": "list_agents", "subCallId": "s5"}, "seq": 6, "time": 1700000006000, "type": "tool/ptc-dispatch"}
+{"data": {"arguments": {"name": "w1", "timeout": 60}, "name": "wait_agent", "subCallId": "s7"}, "seq": 7, "time": 1700000007000, "type": "tool/ptc-dispatch-start"}
+{"data": {"arguments": {"name": "w1", "timeout": 60}, "content": [{"text": "w1 still running", "type": "text"}], "isError": false, "name": "wait_agent", "subCallId": "s7"}, "seq": 8, "time": 1700000008000, "type": "tool/ptc-dispatch"}
+{"data": {"arguments": {"name": "w1", "timeout": 60}, "name": "wait_agent", "subCallId": "s9"}, "seq": 9, "time": 1700000009000, "type": "tool/ptc-dispatch-start"}
+{"data": {"arguments": {"name": "w1", "timeout": 60}, "content": [{"text": "w1 still running", "type": "text"}], "isError": false, "name": "wait_agent", "subCallId": "s9"}, "seq": 10, "time": 1700000010000, "type": "tool/ptc-dispatch"}
+{"data": {"arguments": {"name": "w1", "timeout": 60}, "name": "wait_agent", "subCallId": "s11"}, "seq": 11, "time": 1700000011000, "type": "tool/ptc-dispatch-start"}
+{"data": {"arguments": {"name": "w1", "timeout": 60}, "content": [{"text": "w1 still running", "type": "text"}], "isError": false, "name": "wait_agent", "subCallId": "s11"}, "seq": 12, "time": 1700000012000, "type": "tool/ptc-dispatch"}
+{"data": {"arguments": {"name": "w1", "timeout": 60}, "name": "wait_agent", "subCallId": "s13"}, "seq": 13, "time": 1700000013000, "type": "tool/ptc-dispatch-start"}
+{"data": {"arguments": {"name": "w1", "timeout": 60}, "content": [{"text": "w1 still running", "type": "text"}], "isError": false, "name": "wait_agent", "subCallId": "s13"}, "seq": 14, "time": 1700000014000, "type": "tool/ptc-dispatch"}
+{"data": {"arguments": {"name": "w1", "timeout": 60}, "name": "wait_agent", "subCallId": "s15"}, "seq": 15, "time": 1700000015000, "type": "tool/ptc-dispatch-start"}
+{"data": {"arguments": {"name": "w1", "timeout": 60}, "content": [{"text": "w1 still running", "type": "text"}], "isError": false, "name": "wait_agent", "subCallId": "s15"}, "seq": 16, "time": 1700000016000, "type": "tool/ptc-dispatch"}

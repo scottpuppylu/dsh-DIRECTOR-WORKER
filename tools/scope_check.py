@@ -22,38 +22,37 @@ files as they are now (tracked files that differ from the merge base, untracked 
 or, with `--candidate SHA`, the candidate commit's tree against its merge base with BASE_REF (use it on the commit you
 hand in). A `REQUIRED_BASIS:` line says which. A file staged and then put back as it was is MISSING.
 
-Size limit (ds.2; 2.2.4-ds.4 B1; 2.2.5-ds.5): a Standard or Strict order may change at most
-order_limits.max_files_per_order files (3), max_lines_per_order non-test lines (200, added + deleted, `git diff
---numstat`; binary files count 0) and max_test_lines_per_order lines in test files (400) in the final result (the
---candidate tree, else the working files and untracked files, against the merge base). Test files (test_*.py,
-*_test.py, anything under tests/) count as files, but their lines go to the test-line limit:
-`SIZE: files=n lines=n test_lines=n limit=3/200/400`, `OVERSIZE files=n/3 lines=n/200 test_lines=n/400` is a VIOLATION:
-split the order. The limits come from the top-level "order_limits" block of director_work.json (--config, default: the
-order's folder/../director_work.json; safety_gate.py); 0 turns a limit off. An old sdd.max_*_per_order is still read
-with `NOTE: SHADOW WARN ... 請搬到 order_limits` (2.2.4-ds.4); the other WARN lines of an old "sdd" block
-(2.2.5-ds.5, safety_gate.legacy_notes) are printed as NOTEs.
+2.2.5 (B10, shared checkout; ported from the DeepSeek port's 2.2.4-ds.4 B2): when several workers share one checkout
+the four states above hold the other workers' files too. With --shared, or when the order's WORKTREE line says 共用 /
+shared, only this order's work is counted: the commits in merge-base..HEAD (or ..--candidate) whose message names the
+order ID (`WO-12: ...`; the leading WO-n of the title and of the file name), each commit's own files (one commit at a
+time, not the sum of the branch), plus, without --candidate, uncommitted files inside SCOPE. Anything else changed in
+the checkout prints `OTHER path` and is not checked; an out-of-scope file in this order's own commit is still OUTSIDE.
+STATES shows own_commits= own_uncommitted=, the last line ends with ` shared=1 others=n`.
+2.2.5 (B10): `BASE_REF = origin/main @ abc1234（v2.2.4）`: text in brackets, and after ` #`, is a comment. A
+`WORKTREE:` line says, from the git folders (the same code as worktree.py status), whether the folder is a linked worktree (隔離 worktree) or the main
+checkout (共用 checkout); copy it into the report instead of writing it by hand.
+2.2.5 (B11): a path too long for git on Windows gives one line naming the path and how far over it is.
+3.0.0 B1 (from agy.3): with --candidate (and no shared checkout) SCOPE, FORBIDDEN, OUTSIDE and REQUIRED_CHANGES are
+all matched against the candidate's own diff, merge-base(BASE_REF, candidate)..candidate; the four states of the
+checkout are not read (STATES shows candidate=n). So a reviewer on a clean checkout, another branch or an orphan HEAD
+gets the same verdict as the worker; files left uncommitted in the checkout are not part of the candidate.
 
-2.2.4-ds.4 (B2, shared checkout): DSH workers share one checkout, so the four states above hold the other workers'
-files too. With --shared, or when the order's WORKTREE line says 共用 / shared, only this order's work is counted: the
-commits in merge-base..HEAD (or ..--candidate) whose message names the order ID (`WO-12: ...`; the leading WO-n of the
-title and file name), plus, without --candidate, uncommitted files inside SCOPE. Anything else changed in the checkout
-prints `OTHER path` and is not checked; an out-of-scope file in this order's own commit is still OUTSIDE. STATES shows
-own_commits= own_uncommitted=, the last line ends with ` shared=1 others=n`. The size is summed over those commits.
-Upstream DW 2.2.5 (B10) took this mode back from ds.4 B2 (each commit's own files, one commit at a time, not the sum
-of the branch); this is the one copy.
-
-From upstream DW 2.2.5 (B10): `BASE_REF = origin/main @ abc1234（v2.2.4）`: text in brackets, and after ` #`, is a
-comment. A `WORKTREE:` line says, from `git worktree list`, whether the folder is a linked worktree (隔離 worktree) or
-the main checkout (共用 checkout); copy it into the report instead of writing it by hand (dsh_session.py
---worktree-status and gate_check.py --report-skeleton print the same line, from worktree_line here).
-From upstream DW 2.2.5 (B11): a path too long for git on Windows gives one line naming the path and how far over it is.
-Any other error is one `SCOPE_CHECK: NOT_RUN` line (exit 2), never a traceback (2.2.5 B7).
-
-2.2.4-ds.4 (B5, protected tests): the order's TESTS_LOCKED files and the "protected_tests" globs of director_work.json
-may only be added, or grow at their end (new tests appended). Changing or removing content that was there at the merge
-base, or deleting the file, prints `PROTECTED path (...)` and is a VIOLATION (` protected=n`). Line endings and trailing
-blank lines are ignored. `PROTECTED_CHANGED: a.py, b.py` (or NONE) lists the protected files that changed; copy it into
-the report's PROTECTED_CHANGED line (gate_check.py --match holds the two against git).
+3.0.0 B4 (Director decision; from agydw / dshdw ds.4 B1 and B5; the rules are in safety_gate.py): checked only when
+declared, at every strength.
+  Size: the order's `ORDER_LIMITS = files=<n> lines=<n> test_lines=<n>` line, or for a Standard / Strict order the
+  "order_limits" block of director_work.json (--config, default: the order's folder or the one above it). The final
+  result (the --candidate diff, else the working files and untracked files, against the merge base; in a shared
+  checkout this order's commits and in-scope uncommitted files) may change at most that many files, non-test lines
+  (added + deleted, `git diff --numstat`; binary files count 0) and test-file lines (test_*.py, *_test.py, tests/).
+  `SIZE: files=n lines=n test_lines=n limit=f/l/t` ('-' = off); over a limit is `OVERSIZE ...`, a VIOLATION, and the
+  last line ends with ` oversize=1`: split the order.
+  Protected tests: the order's TESTS_LOCKED files and the "protected_tests" globs may be added, or grow at their end
+  (new tests appended). Changing or removing content that was there at the merge base, or deleting the file, is
+  `PROTECTED path (...)`, a VIOLATION (` protected=n`). Line endings and trailing blank lines are ignored.
+  `PROTECTED_CHANGED: a.py, b.py` (or NONE) lists the protected files that changed; copy it into the report
+  (gate_check.py --match holds the two against git). A director_work.json that cannot be read, or limits / globs of the
+  wrong type, is NOT_RUN.
 
 The last line is the one to paste into the TASK REPORT. Exit 0 pass, 1 violation, 2 could not check.
 """
@@ -63,6 +62,14 @@ import pathlib
 import re
 import subprocess
 import sys
+import importlib.util
+
+_spec = importlib.util.spec_from_file_location("dw_common", pathlib.Path(__file__).with_name("_common.py"))
+_common = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_common)
+_spec = importlib.util.spec_from_file_location("dw_safety_gate", pathlib.Path(__file__).with_name("safety_gate.py"))
+safety = importlib.util.module_from_spec(_spec)  # 3.0.0 B4: order_limits / protected_tests
+_spec.loader.exec_module(safety)
 
 
 def parse_list(text, key):
@@ -129,20 +136,161 @@ def long_path(message, root):
         return None
 
 
-def worktree_line(root):
-    """2.2.5 (B10): `WORKTREE: 隔離 worktree <root>` for a linked worktree, `WORKTREE: 共用 checkout <root>` for the
-    main checkout, from `git worktree list --porcelain` (its first entry is the main checkout); None when git cannot
-    list them."""
+BRACKETED = re.compile(r"[（(][^（()）]*[)）]")
+
+
+def order_base(text):
+    """The base ref of a work order's BASE_REF line (`origin/main @ abc1234（v2.2.4） # note` gives abc1234), or None.
+    2.2.5 (B10): text in brackets and after ` #` is a comment."""
+    m = re.search(r"^\s*BASE_REF\s*=\s*(.*)$", text, re.M)
+    value = BRACKETED.sub(" ", re.split(r"\s+#", m.group(1))[0]).split("@")[-1].split() if m else []
+    return value[0] if value and not value[0].startswith("<") else None
+
+
+ORDER_ID = re.compile(r"[A-Za-z]+(?:-[A-Za-z]+)*-\d+")
+
+
+def order_ids(text, path):
+    """2.2.5 (from ds.4 B2): the IDs a commit message may name this order by: the leading `WO-n` / `WO-DS-n` of the
+    title's first word and of the file name."""
+    title = re.search(r"^#\s+(\S+)", text, re.M)
+    ids = []
+    for name in (title.group(1) if title else "", pathlib.Path(path).stem):
+        m = ORDER_ID.match(name)
+        if m and m.group(0).upper() not in (i.upper() for i in ids):
+            ids.append(m.group(0))
+    return ids
+
+
+def shared_mode(text, flag):
+    """2.2.5 (from ds.4 B2): on with --shared, or when the order's WORKTREE field says the workers share one checkout
+    (共用 / shared)."""
+    if flag:
+        return True
+    m = re.search(r"^[ \t]*WORKTREE[ \t]*=[ \t]*(.*)$", text, re.M)
+    return bool(m and re.search(r"共用|shared", m.group(1), re.I))
+
+
+def own_commits(root, since, until, ids):
+    """Commits in since..until whose message names one of ids (as a whole word), oldest first."""
+    if not ids:
+        return []
+    named = re.compile("|".join(rf"(?<![\w-]){re.escape(i)}(?!\w)" for i in ids), re.I)
+    out = []
+    for entry in git(root, "log", "--reverse", "--format=%H%x1f%B%x1e", f"{since}..{until}").split("\x1e"):
+        sha, _, message = entry.strip().partition("\x1f")
+        if sha and named.search(message):
+            out.append(sha)
+    return out
+
+
+def commit_files(root, sha):
+    """The paths one commit changes (against its first parent; all of them for a root commit)."""
+    out = git(root, "diff-tree", "--no-commit-id", "-r", "--root", "--name-only", "--no-renames", "-z", sha)
+    return {path for path in out.split("\0") if path}
+
+
+def numstat(text):
+    """3.0.0 B4: {path: added + deleted} from `git diff --numstat -z --no-renames` output; a binary file counts 0."""
+    out = {}
+    for row in text.split("\0"):
+        parts = row.split("\t")
+        if len(parts) == 3 and parts[2]:
+            out[parts[2]] = out.get(parts[2], 0) + sum(int(n) for n in parts[:2] if n.isdigit())
+    return out
+
+
+def file_lines(root, path):
+    """Lines of an untracked file (0 for a binary or unreadable one)."""
     try:
-        listed = [line[len("worktree "):].strip() for line in git(root, "worktree", "list", "--porcelain").splitlines()
-                  if line.startswith("worktree ")]
-    except RuntimeError:
+        data = pathlib.Path(root, path).read_bytes()
+    except OSError:
+        return 0
+    return 0 if b"\0" in data[:8000] else len(data.splitlines())
+
+
+def size_of(per_file):
+    """(files, non-test lines, test lines) of {path: lines}: test files count as files, their lines apart."""
+    test = [p for p in per_file if safety.is_test_file(p)]
+    return len(per_file), sum(n for p, n in per_file.items() if p not in test), sum(per_file[p] for p in test)
+
+
+def read_at(root, rev, path):
+    """bytes of path at rev, or None when it is not there."""
+    done = subprocess.run(["git", "-C", str(root), "cat-file", "blob", f"{rev}:{path}"], capture_output=True)
+    return done.stdout if done.returncode == 0 else None
+
+
+def normal(data):
+    return data.replace(b"\r\n", b"\n").rstrip(b"\n")
+
+
+def check_protected(root, since, candidate, candidates, locked, globs):
+    """3.0.0 B4 (dshdw ds.4 B5): (protected files that changed, [(path, why)] that broke the rule) over the changed
+    paths `candidates`. A protected file may be added, or grow at its end; changing or removing content that was there
+    at `since`, or deleting the file, breaks the rule. Line endings and trailing blank lines are ignored."""
+    rx = [glob_regex(glob) for glob in list(globs) + list(locked)]
+    changed, broken = [], []
+    for path in sorted(candidates):
+        if not any(r.fullmatch(path) for r in rx):
+            continue
+        old = read_at(root, since, path)
+        new = read_at(root, candidate, path) if candidate else (
+            pathlib.Path(root, path).read_bytes() if pathlib.Path(root, path).is_file() else None)
+        if old == new:
+            continue
+        changed.append(path)
+        if old is None:
+            continue  # a new protected file: allowed
+        if new is None:
+            broken.append((path, "a protected test file was deleted"))
+            continue
+        before, after = normal(old), normal(new)
+        if not (after.startswith(before) and (len(after) == len(before) or after[len(before):len(before) + 1] == b"\n")):
+            broken.append((path, "existing content changed; a protected test file may only grow at its end"))
+    return changed, broken
+
+
+def protected_summary(repo, order_text, order_path, config, candidate=None):
+    """3.0.0 B4 (dshdw ds.4 B5): (protected files changed, [(path, why)] broken) of one order, for gate_check --match
+    to hold a report's PROTECTED_CHANGED against; None when the order protects nothing. The changed paths are the
+    candidate's diff against its merge base (else the working files); in a shared checkout only this order's commits
+    (and, with no candidate, its in-scope uncommitted files). Raises RuntimeError when git cannot tell."""
+    locked, globs = safety.protected_paths(order_text, config)
+    if not (locked or globs):
         return None
-    if not listed:
+    base = order_base(order_text)
+    if not base:
+        raise RuntimeError("no usable BASE_REF in the work order")
+    root = git(repo, "rev-parse", "--show-toplevel").strip()
+    commit = git(root, "rev-parse", "--verify", candidate + "^{commit}").strip() if candidate else None
+    since = git(root, "merge-base", base, commit or "HEAD").strip()
+    names = ("diff", "--name-only", "--no-renames", "-z")
+    if shared_mode(order_text, False):
+        mine = own_commits(root, since, commit or "HEAD", order_ids(order_text, order_path)) or ([commit] if commit else [])
+        paths = set().union(*(commit_files(root, sha) for sha in mine)) if mine else set()
+        if not commit:
+            scope_rx = [(g, glob_regex(g)) for g in parse_list(order_text, "SCOPE") or [] if g != "NONE"]
+            loose = {p for p in git(root, *names, "HEAD").split("\0") if p}
+            loose |= {p for p in git(root, "ls-files", "--others", "--exclude-standard", "-z").split("\0") if p}
+            paths |= {p for p in loose if matches(p, scope_rx)}
+    elif commit:
+        paths = {p for p in git(root, *names, since, commit).split("\0") if p}
+    else:
+        paths = {p for p in git(root, *names, since).split("\0") if p}
+        paths |= {p for p in git(root, "ls-files", "--others", "--exclude-standard", "-z").split("\0") if p}
+    return check_protected(root, since, commit, paths, locked, globs)
+
+
+def worktree_line(root):
+    """2.2.5 (B10): `WORKTREE: 隔離 worktree <root>` for a linked worktree, `WORKTREE: 共用 checkout（主 checkout） <root>`
+    for the main checkout. 3.0.0: one copy with worktree.py status, read from the git folders (_common.find_repo), so a
+    path spelled through a link or a junction is never taken for an isolated worktree; None outside a checkout."""
+    repo = _common.find_repo(root)
+    if repo is None:
         return None
-    same = os.path.normcase(os.path.normpath(listed[0])) == os.path.normcase(os.path.normpath(root))
-    kind = "共用 checkout（主 checkout）" if same else "隔離 worktree"
-    return f"WORKTREE: {kind} {root} (git worktree list: {len(listed)})"
+    kind = "隔離 worktree" if repo.linked else "共用 checkout（主 checkout）"
+    return f"WORKTREE: {kind} {root}"
 
 
 def hidden_changes(root):
@@ -174,190 +322,6 @@ def hidden_changes(root):
     return marked, changed
 
 
-def limits_module():
-    """safety_gate.py next to this file (the order_limits / protected_tests blocks of director_work.json)."""
-    import importlib.util
-    path = pathlib.Path(__file__).resolve().parent / "safety_gate.py"
-    spec = importlib.util.spec_from_file_location("safety_gate", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def numstat(text):
-    """{path: added + deleted} from `git diff --numstat -z --no-renames` output; a binary file counts 0."""
-    out = {}
-    for row in text.split("\0"):
-        parts = row.split("\t")
-        if len(parts) == 3 and parts[2]:
-            out[parts[2]] = out.get(parts[2], 0) + sum(int(n) for n in parts[:2] if n.isdigit())
-    return out
-
-
-def file_lines(root, path):
-    """Lines of an untracked file (0 for a binary or unreadable one)."""
-    try:
-        data = pathlib.Path(root, path).read_bytes()
-    except OSError:
-        return 0
-    return 0 if b"\0" in data[:8000] else len(data.splitlines())
-
-
-def is_test_default(path):
-    return bool(re.search(r"(?:^|/)(?:tests/|test_[^/]*\.py$|[^/]*_test\.py$)", path))
-
-
-def size_of(per_file, is_test=None):
-    """(files, non-test lines, test lines) of {path: lines}. 2.2.4-ds.4 (B1): test files (test_*.py, *_test.py,
-    under tests/) still count as files, but their lines go to the test-line limit."""
-    is_test = is_test or is_test_default
-    paths = list(per_file)
-    return (len(paths), sum(per_file[p] for p in paths if not is_test(p)), sum(per_file[p] for p in paths if is_test(p)))
-
-
-def diff_size(root, base, candidate=None, is_test=None):
-    """(files, lines, test lines) the work changes in its final result: the candidate's tree,
-    else the working files plus untracked files, against the merge base with base. Lines are added + deleted."""
-    if candidate:
-        commit = git(root, "rev-parse", "--verify", candidate + "^{commit}").strip()
-        args = [git(root, "merge-base", base, commit).strip(), commit]
-    else:
-        args = [git(root, "merge-base", base, "HEAD").strip()]
-    per_file = numstat(git(root, "diff", "--numstat", "--no-renames", "-z", *args))
-    if not candidate:
-        for path in git(root, "ls-files", "--others", "--exclude-standard", "-z").split("\0"):
-            if path:
-                per_file[path] = file_lines(root, path)
-    return size_of(per_file, is_test)
-
-
-ORDER_ID = re.compile(r"[A-Za-z]+(?:-[A-Za-z]+)*-\d+")
-
-
-def order_ids(text, path):
-    """2.2.4-ds.4 (B2): the IDs a commit message may name this order by: the leading `WO-n` / `WO-DS-n` of the
-    title's first word and of the file name."""
-    title = re.search(r"^#\s+(\S+)", text, re.M)
-    ids = []
-    for name in (title.group(1) if title else "", pathlib.Path(path).stem):
-        m = ORDER_ID.match(name)
-        if m and m.group(0).upper() not in (i.upper() for i in ids):
-            ids.append(m.group(0))
-    return ids
-
-
-def shared_mode(text, flag):
-    """2.2.4-ds.4 (B2, WO-DS-006 #2): on with --shared, or when the order's WORKTREE field says the workers share one
-    checkout (「共用」/ shared; DSH's default, docs/11)."""
-    if flag:
-        return True
-    m = re.search(r"^[ \t]*WORKTREE[ \t]*=[ \t]*(.*)$", text, re.M)
-    return bool(m and re.search(r"共用|shared", m.group(1), re.I))
-
-
-def own_commits(root, since, until, ids):
-    """Commits in since..until whose message names one of ids (as a whole word), oldest first."""
-    if not ids:
-        return []
-    named = re.compile("|".join(rf"(?<![\w-]){re.escape(i)}(?!\w)" for i in ids), re.I)
-    out = []
-    for entry in git(root, "log", "--reverse", "--format=%H%x1f%B%x1e", f"{since}..{until}").split("\x1e"):
-        sha, _, message = entry.strip().partition("\x1f")
-        if sha and named.search(message):
-            out.append(sha)
-    return out
-
-
-def commit_numstat(root, sha):
-    return numstat(git(root, "diff-tree", "--no-commit-id", "-r", "--root", "--numstat", "--no-renames", "-z", sha))
-
-
-def locked_paths(text):
-    """The paths of the order's TESTS_LOCKED list (`- <path> sha256=...`); NONE gives none."""
-    return [item.split()[0].replace("\\", "/") for item in parse_list(text, "TESTS_LOCKED") or []
-            if item.split() and item.split()[0] != "NONE"]
-
-
-def read_at(root, rev, path):
-    """bytes of path at rev, or None when it is not there."""
-    done = subprocess.run(["git", "-C", str(root), "cat-file", "blob", f"{rev}:{path}"], capture_output=True)
-    return done.stdout if done.returncode == 0 else None
-
-
-def normal(data):
-    return data.replace(b"\r\n", b"\n").rstrip(b"\n")
-
-
-def check_protected(root, since, candidate, candidates, locked, globs):
-    """2.2.4-ds.4 (B5, WO-DS-006 #7): (protected files that changed, [(path, why)] that broke the rule), over the
-    changed paths `candidates`. Protected = the order's TESTS_LOCKED paths and the director_work.json
-    "protected_tests" globs. Such a file may be added, or grow at its end (new tests appended); changing or removing
-    content that was there at the merge base, or deleting the file, breaks the rule. Line endings and trailing blank
-    lines are ignored."""
-    rx = [glob_regex(glob) for glob in globs]
-    lock = {glob_regex(path) for path in locked}
-    changed, broken = [], []
-    for path in sorted(candidates):
-        if not (any(r.fullmatch(path) for r in rx) or any(r.fullmatch(path) for r in lock)):
-            continue
-        old = read_at(root, since, path)
-        new = read_at(root, candidate, path) if candidate else (
-            pathlib.Path(root, path).read_bytes() if pathlib.Path(root, path).is_file() else None)
-        if old == new:
-            continue
-        changed.append(path)
-        if old is None:
-            continue  # a new protected file: allowed
-        if new is None:
-            broken.append((path, "a protected test file was deleted"))
-            continue
-        before, after = normal(old), normal(new)
-        if not (after.startswith(before) and (len(after) == len(before) or after[len(before):len(before) + 1] == b"\n")):
-            broken.append((path, "existing content changed; a protected test file may only grow at its end"))
-    return changed, broken
-
-
-BRACKETED = re.compile(r"[（(][^（()）]*[)）]")
-
-
-def order_base(text):
-    """The base ref of a work order's BASE_REF line (`origin/main @ abc1234（v2.2.4） # note` gives abc1234), or None.
-    2.2.5 (B10): text in brackets and after ` #` is a comment."""
-    m = re.search(r"^\s*BASE_REF\s*=\s*(.*)$", text, re.M)
-    value = BRACKETED.sub(" ", re.split(r"\s+#", m.group(1))[0]).split("@")[-1].split() if m else []
-    return value[0] if value and not value[0].startswith("<") else None
-
-
-def protected_summary(repo, order_text, order_path, globs, base=None, candidate=None):
-    """2.2.4-ds.4 (B5): (protected files changed, [(path, why)] broken) of one order, for gate_check --match to hold
-    a report's PROTECTED_CHANGED against; None when the order protects nothing. The changed paths are the candidate's
-    tree against its merge base (else the working files); in a shared checkout only this order's commits (and, with
-    no candidate, its in-scope uncommitted files). Raises RuntimeError when git cannot tell."""
-    locked = locked_paths(order_text)
-    if not (locked or globs):
-        return None
-    base = base or order_base(order_text)
-    if not base:
-        raise RuntimeError("no usable BASE_REF in the work order")
-    root = git(repo, "rev-parse", "--show-toplevel").strip()
-    commit = git(root, "rev-parse", "--verify", candidate + "^{commit}").strip() if candidate else None
-    since = git(root, "merge-base", base, commit or "HEAD").strip()
-    names = ("diff", "--name-only", "--no-renames", "-z")
-    untracked = {p for p in git(root, "ls-files", "--others", "--exclude-standard", "-z").split("\0") if p}
-    if shared_mode(order_text, False):
-        mine = own_commits(root, since, commit or "HEAD", order_ids(order_text, order_path)) or ([commit] if commit else [])
-        paths = set().union(*(commit_numstat(root, sha) for sha in mine)) if mine else set()
-        if not commit:
-            scope_rx = [(g, glob_regex(g)) for g in parse_list(order_text, "SCOPE") or [] if g != "NONE"]
-            loose = {p for p in git(root, *names, "HEAD").split("\0") if p} | untracked
-            paths |= {p for p in loose if matches(p, scope_rx)}
-    elif commit:
-        paths = {p for p in git(root, *names, since, commit).split("\0") if p}
-    else:
-        paths = {p for p in git(root, *names, since).split("\0") if p} | untracked
-    return check_protected(root, since, commit, paths, locked, globs)
-
-
 def main():
     sys.stdout.reconfigure(encoding="utf-8")  # before parse_args: --help prints during parsing
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -365,11 +329,12 @@ def main():
     ap.add_argument("--repo", default=".", help="any folder inside the worktree to check (default: current folder)")
     ap.add_argument("--base", help="base ref (default: BASE_REF of the work order)")
     ap.add_argument("--max-lines", type=int, default=20, help="how many violating paths to print (default 20)")
-    ap.add_argument("--candidate", help="2.2: the commit handed in; REQUIRED_CHANGES is matched against its tree")
-    ap.add_argument("--config", help="director_work.json with \"order_limits\" and \"protected_tests\" (default: next "
-                    "to the order's folder; 3 files / 200 lines / 400 test lines when there is none)")
-    ap.add_argument("--shared", action="store_true", help="2.2.4-ds.4: several workers share this checkout; count only "
-                    "this order's commits and its in-scope uncommitted files (on by itself when WORKTREE says 共用)")
+    ap.add_argument("--candidate", help="the commit handed in; 3.0.0 B1: SCOPE, FORBIDDEN and REQUIRED_CHANGES all match its diff")
+    ap.add_argument("--shared", action="store_true", help="2.2.5: several workers share this checkout; count only "
+                    "this order's commits, one at a time, and its in-scope uncommitted files (on by itself when the "
+                    "order's WORKTREE says 共用 / shared)")
+    ap.add_argument("--config", help="3.0.0 B4: director_work.json with \"order_limits\" and \"protected_tests\" "
+                    "(default: in the order's folder or the one above it; none: only what the order declares)")
     a = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
 
@@ -387,98 +352,107 @@ def main():
     if not scope or not forbidden:
         return cannot("SCOPE: / FORBIDDEN: has no `- item` line right below it (run gate_check.py --order)")
     scope, forbidden = [s for s in scope if s != "NONE"], [f for f in forbidden if f != "NONE"]
-    scope_rx = [(g, glob_regex(g)) for g in scope]
-    forbidden_rx = [(g, glob_regex(g)) for g in forbidden]
     required = parse_list(text, "REQUIRED_CHANGES")
     base = a.base or order_base(text)
-    if not base:
+    if not base or base.startswith("<"):
         return cannot("no usable BASE_REF in the work order; pass --base")
     shared = shared_mode(text, a.shared)
-    notes, where = [], None
+    scope_rx = [(g, glob_regex(g)) for g in scope]
+    forbidden_rx = [(g, glob_regex(g)) for g in forbidden]
+    notes, others, per_commit, where = [], set(), {}, None
+    config, problems = safety.load_config(order, a.config)  # 3.0.0 B4: size limits and protected tests
+    problems = [p for p in problems if "cannot be read" in p or "not a JSON object" in p
+                or p.startswith(("SAFETY order_limits", "SAFETY protected_tests"))]
+    if problems:
+        return cannot(problems[0])
+    try:
+        limits = safety.order_limits(text, config)
+    except ValueError as error:
+        return cannot(str(error))
+    locked, globs = safety.protected_paths(text, config)
 
     try:
-        limits_mod = limits_module()
-        config, problem = limits_mod.load_config(order, a.config)
-        if problem:
-            return cannot(problem)
-        notes += limits_mod.legacy_notes(config)
         root = git(a.repo, "rev-parse", "--show-toplevel").strip()
-        where = worktree_line(root)
-        merge_base = git(root, "merge-base", base, "HEAD").strip()
         names = ("diff", "--name-only", "--no-renames", "--ignore-submodules=none", "-z")
+        where = worktree_line(root)
         commit = git(root, "rev-parse", "--verify", a.candidate + "^{commit}").strip() if a.candidate else None
-        since = git(root, "merge-base", base, commit).strip() if commit else merge_base
-        states = {}
-        others = set()
-        if commit and not shared:
-            cand_changed = {path for path in git(root, *names, since, commit).split("\0") if path}
+        final, basis = None, None
+        if commit and not shared:  # 3.0.0 B1 (agy.3): only the candidate's diff; what the checkout holds is not read
+            since = merge_base = git(root, "merge-base", base, commit).strip()
+            states = {"candidate": git(root, *names, since, commit)}
             marked, hidden = {}, set()
-            states = {"candidate": cand_changed}
-            changed = sorted(cand_changed)
-            final = set(cand_changed) if required is not None else None
-            basis = f"candidate={commit[:12]}" if required is not None else None
-            per_file = None
+            if required is not None:
+                final, basis = states["candidate"], f"candidate={commit[:12]}"
         else:
+            merge_base = git(root, "merge-base", base, "HEAD").strip()
             states = {"committed": git(root, *names, merge_base, "HEAD"), "staged": git(root, *names, "--cached", "HEAD"),
                       "unstaged": git(root, *names),
                       "untracked": git(root, "ls-files", "--others", "--exclude-standard", "-z")}
             marked, hidden = hidden_changes(root)
-            states = {state: {path for path in out.split("\0") if path} for state, out in states.items()}
-            states["unstaged"] |= hidden
-            uncommitted = states["staged"] | states["unstaged"] | states["untracked"]
-            if shared:  # 2.2.4-ds.4 (B2): only this order's commits and its own uncommitted files
-                ids = order_ids(text, order)
-                mine = own_commits(root, since, commit or "HEAD", ids)
-                if not mine and commit:
-                    mine = [commit]
-                    notes.append(f"SHARED: no commit in {since[:10]}..{commit[:10]} names {'/'.join(ids) or 'this order'}; "
-                                 "only --candidate itself is counted")
-                elif not mine:
-                    notes.append(f"SHARED: no commit in {since[:10]}..HEAD names {'/'.join(ids) or 'this order'} yet; "
-                                 "name the order ID in each commit message")
-                per_commit = {sha: commit_numstat(root, sha) for sha in mine}
-                committed = set().union(*per_commit.values()) if per_commit else set()
-                in_scope = {path for path in uncommitted if matches(path, scope_rx)} if not commit else set()
-                others = (uncommitted - in_scope) if not commit else set()
-                others |= {path for path in states["committed"] if path not in committed} if not commit else set()
-                states = {"own_commits": committed, "own_uncommitted": in_scope}
-                changed = sorted(committed | in_scope)
-                per_file = {}
-                for rows in per_commit.values():
-                    for path, lines in rows.items():
-                        per_file[path] = per_file.get(path, 0) + lines
-                tracked = sorted(in_scope - states_untracked(root, in_scope))
-                if tracked:
-                    for path, lines in numstat(git(root, "diff", "--numstat", "--no-renames", "-z", "HEAD", "--",
-                                                   *tracked)).items():
-                        per_file[path] = per_file.get(path, 0) + lines
-                for path in in_scope - set(tracked):
-                    per_file[path] = per_file.get(path, 0) + file_lines(root, path)
-                final = set(changed)
-                basis = (f"shared commits={len(mine)}" + (f" candidate={commit[:12]}" if commit else "")
-                         if required is not None else None)
-            else:
-                changed = sorted(set().union(*states.values()))
-                final, basis = None, None
-                if required is not None:  # 2.2 (F14): the final result, not the union of layers
-                    final = git(root, *names, merge_base) + "\0" + "\0".join(states["untracked"])
-                    basis = "worktree-final"
-                final = {path for path in (final or "").split("\0") if path} | (hidden if basis == "worktree-final" else set())
-                per_file = None
-        size = None
-        if re.search(r"^\s*GOVERNANCE\s*=\s*(Standard|Strict)\b", text, re.M):  # order_limits
-            limits = limits_mod.order_limits(config, notes)
-            if any(limits):
-                counted = size_of(per_file, limits_mod.is_test_file) if shared else diff_size(
-                    root, base, a.candidate, limits_mod.is_test_file)
-                size = counted + limits
-        protected = config.get("_protected_tests") or []
-        locked = locked_paths(text)
-        guarded, broken = check_protected(root, since, commit, set(changed), locked, protected) \
-            if (protected or locked) else ([], [])
-    except (RuntimeError, OSError, ValueError, TypeError) as error:
+            since = git(root, "merge-base", base, commit).strip() if commit else merge_base
+        if shared:  # 2.2.5 (B10, from ds.4 B2): this order's commits, one at a time
+            ids = order_ids(text, order)
+            mine = own_commits(root, since, commit or "HEAD", ids)
+            if not mine and commit:
+                mine = [commit]
+                notes.append(f"SHARED: no commit in {since[:10]}..{commit[:10]} names {'/'.join(ids) or 'this order'}; "
+                             "only --candidate itself is counted")
+            elif not mine:
+                notes.append(f"SHARED: no commit in {since[:10]}..HEAD names {'/'.join(ids) or 'this order'} yet; "
+                             "name the order ID in each commit message")
+            per_commit = {sha: commit_files(root, sha) for sha in mine}
+        elif required is not None and not commit:  # 2.2 (F14): the final result, not the union of layers
+            final = git(root, *names, merge_base) + "\0" + states["untracked"]
+            basis = "worktree-final"
+    except (RuntimeError, OSError) as error:
         return cannot(str(error))
 
+    states = {state: {path for path in out.split("\0") if path} for state, out in states.items()}
+    if "unstaged" in states:
+        states["unstaged"] |= hidden
+    if shared:
+        uncommitted = states["staged"] | states["unstaged"] | states["untracked"]
+        committed = set().union(*per_commit.values()) if per_commit else set()
+        in_scope = {path for path in uncommitted if matches(path, scope_rx)} if not commit else set()
+        if not commit:
+            others = (uncommitted - in_scope) | {path for path in states["committed"] if path not in committed}
+        states = {"own_commits": committed, "own_uncommitted": in_scope}
+        changed = sorted(committed | in_scope)
+        final = set(changed)
+        basis = (f"shared commits={len(per_commit)}" + (f" candidate={commit[:12]}" if commit else "")
+                 if required is not None else None)
+    else:
+        changed = sorted(set().union(*states.values()))
+    size, guarded, broken = None, [], []
+    try:  # 3.0.0 B4 (from agydw / dshdw ds.4 B1, B5): checked only when declared
+        if limits and shared:
+            per_file = {}
+            for sha in per_commit:
+                for path, lines in numstat(git(root, "diff-tree", "--no-commit-id", "-r", "--root", "--numstat",
+                                               "--no-renames", "-z", sha)).items():
+                    per_file[path] = per_file.get(path, 0) + lines
+            loose = set(changed) - set().union(set(), *per_commit.values())
+            untracked = {p for p in git(root, "ls-files", "--others", "--exclude-standard", "-z").split("\0") if p}
+            tracked = sorted(loose - untracked)
+            if tracked:
+                for path, lines in numstat(git(root, "diff", "--numstat", "--no-renames", "-z", "HEAD", "--",
+                                               *tracked)).items():
+                    per_file[path] = per_file.get(path, 0) + lines
+            for path in loose & untracked:
+                per_file[path] = per_file.get(path, 0) + file_lines(root, path)
+        elif limits and commit:
+            per_file = numstat(git(root, "diff", "--numstat", "--no-renames", "-z", since, commit))
+        elif limits:
+            per_file = numstat(git(root, "diff", "--numstat", "--no-renames", "-z", merge_base))
+            for path in git(root, "ls-files", "--others", "--exclude-standard", "-z").split("\0"):
+                if path:
+                    per_file[path] = file_lines(root, path)
+        if limits:
+            size = size_of(per_file) + limits
+        if locked or globs:
+            guarded, broken = check_protected(root, since, commit, set(changed), locked, globs)
+    except (RuntimeError, OSError) as error:
+        return cannot(str(error))
     hits = []
     for path in changed:
         rule = matches(path, forbidden_rx)
@@ -490,14 +464,16 @@ def main():
     outside = len(hits) - count
     forbidden_paths = {hit[1] for hit in hits if hit[0] == "FORBIDDEN"}
     hits += [("PROTECTED", path, why) for path, why in broken if path not in forbidden_paths]
+    shielded = sum(1 for hit in hits if hit[0] == "PROTECTED")
+    if not shared:
+        final = {path for path in (final or "").split("\0") if path} | (hidden if basis == "worktree-final" else set())
     missing = [g for g in required or [] if g != "NONE" and not any(glob_regex(g).fullmatch(path) for path in final)]
     hits += [("MISSING", glob, "") for glob in missing]
-    oversize = bool(size) and ((size[3] and size[0] > size[3]) or (size[4] and size[1] > size[4])
-                               or (size[5] and size[2] > size[5]))
+    oversize = bool(size) and any(limit and got > limit for got, limit in zip(size[:3], size[3:]))
     if oversize:
         hits.append(("OVERSIZE", f"files={size[0]}/{size[3] or '-'} lines={size[1]}/{size[4] or '-'} "
-                     f"test_lines={size[2]}/{size[5] or '-'}",
-                     "split the order (order_limits in director_work.json)"))
+                                 f"test_lines={size[2]}/{size[5] or '-'}",
+                     "split the order (ORDER_LIMITS in the order, or order_limits in director_work.json)"))
     for kind, path, rule in hits[:a.max_lines]:
         print(f"{kind:9} {path}" + (f"  ({rule})" if rule else ""))
     if len(hits) > a.max_lines:
@@ -508,6 +484,8 @@ def main():
         print(f"... {len(others) - a.max_lines} more OTHER")
     for note in notes:
         print(f"NOTE: {note}")
+    if where:
+        print(where)
     if marked:
         print(f"FLAGGED: {len(marked)} file(s) marked assume-unchanged or skip-worktree; {len(hidden)} differ from the index")
     print("STATES: " + " ".join(f"{state}={len(paths)}" for state, paths in states.items()))
@@ -516,23 +494,13 @@ def main():
     if size:
         print(f"SIZE: files={size[0]} lines={size[1]} test_lines={size[2]} limit={size[3] or '-'}/{size[4] or '-'}/"
               f"{size[5] or '-'} (test files: test_*.py, *_test.py, tests/)")
-    if protected or locked:
+    if locked or globs:
         print("PROTECTED_CHANGED: " + (", ".join(guarded) if guarded else "NONE"))
-    if where:
-        print(where)
     print(f"SCOPE_CHECK: {'VIOLATION' if hits else 'PASS'} base={merge_base[:10]} changed={len(changed)} "
-          f"forbidden={count} outside={outside}" + (f" protected={len(broken)}" if broken else "")
+          f"forbidden={count} outside={outside}" + (f" protected={shielded}" if shielded else "")
           + ("" if required is None else f" missing={len(missing)}") + (" oversize=1" if oversize else "")
           + (f" shared=1 others={len(others)}" if shared else ""))
     return 1 if hits else 0
-
-
-def states_untracked(root, paths):
-    """The paths among `paths` git does not track."""
-    if not paths:
-        return set()
-    tracked = set(git(root, "ls-files", "-z", "--", *sorted(paths)).split("\0"))
-    return {path for path in paths if path not in tracked}
 
 
 def not_utf8(error, argv=None):

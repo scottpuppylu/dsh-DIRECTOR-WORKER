@@ -1,5 +1,4 @@
-"""Pause flag for every session (read by the workers themselves in dshdw), and a CPU report of a process
-tree after a stop.
+"""Pause switch for every session's tool calls, and a CPU report of a process tree after a stop.
 
   python -I -X utf8 pause_ctl.py on --director DIR --reason TEXT [--by NAME]   write DIR/PAUSE, log "PAUSE on" in DIR/DIRECTOR_LOG.md
   python -I -X utf8 pause_ctl.py off --director DIR [--by NAME]                remove DIR/PAUSE, log "PAUSE off"
@@ -8,11 +7,9 @@ tree after a stop.
 
 --flag FILE uses FILE instead of DIR/PAUSE (on / off / status then log only when --director is given too).
 
-DeepSeek Harness edition: nothing checks the flag before a tool call (DSH has no PreToolUse hook, and hook_guard.py is
-not ported). The flag works only when it is read: the work order tells a worker to run `pause_ctl.py status` (or
-`dsh_guard.py --pause-flag FILE`, which refuses every command while the flag exists) before each risky step, and the
-Director checks it at review (docs/02). A worker that does not look can still act. The flag stops new actions only: a
-program already running keeps running. Stop it by PID, the whole tree (docs/02), then run procs to see what is left.
+While the flag file exists, hook_guard.py --pause-flag FILE denies every tool call but those the rules file's "pause"
+section lets through: reading, reporting, progress files, the pause status. The flag stops new actions only: a program
+already running keeps running. Stop it by PID, the whole tree (docs/02), then run procs to see what is left.
 
 procs lists the given PIDs and all their descendants, reads CPU time twice at least --sample seconds apart, and prints
   STOPPED    the given PIDs that no longer exist
@@ -47,7 +44,7 @@ def flag_paths(a):
 
 
 def clean(text):
-    """One line with no <...> (a status or log line never shows a placeholder)."""
+    """One line with no <...> (a hook message never shows a placeholder)."""
     return re.sub(r"\s+", " ", text).replace("<", "(").replace(">", ")").strip()
 
 

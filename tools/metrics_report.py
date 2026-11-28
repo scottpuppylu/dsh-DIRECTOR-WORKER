@@ -7,14 +7,15 @@ Where each number comes from (every *.md under DIRECTOR is searched):
   返工次數           gate verdicts (`## A`) whose 下一步 sends the work back: CONTINUE_SAME_WORKER, SWITCH_TO_OTHER_WORKER;
                      also orders changed after dispatch (REVISION above 1)
   中斷後遺失的工作   DIRECTOR_LOG lines with `RESUMED <TASK_ID> ... redo=<what had to be redone>`; redo=NONE loses nothing
-  PO 介入次數        PO_PENDING.md entries `ID: OD-..` (a decision) and `ID: ACT-..` (an action); an entry runs to
+  PO 介入次數        PO_PENDING.md entries `ID: OD-..` (a decision), `ID: ACT-..` (an action) and `ID: CH-..` (a web
+                     choice question under its web id, 3.0.0: one number per question); an entry runs to
                      the next one, is open when it holds `STATUS: open`, and is dated by `CREATED: YYYY-MM-DD`.
                      A project that keeps them elsewhere sets, in the config (default DIRECTOR/director_work.json):
                        po_pending_files  files under DIRECTOR to read, default ["PO_PENDING.md"]
-                       po_item_pattern   regex that starts an entry; group 1 is its kind (OD, ACT, ...)
+                       po_item_pattern   regex that starts an entry; group 1 is its kind (OD, ACT, CH, ...)
                        po_open_pattern   regex that marks an entry still waiting for the PO
   新專案導入卡住     DIRECTOR_LOG lines with `BOOTSTRAP_STUCK`
-  額度用量           not read here: run dsh_usage.py (DSH session token report)
+  額度用量           not read here: run usage_report.py
 and the spec review cost: DIRECTOR_LOG lines `SPEC_REVIEW ... tokens=N issues=... adopted=N`.
 
 A number with nothing to count from prints UNKNOWN, never 0: no verdict, no order, no RESUMED line, or a missing
@@ -57,7 +58,7 @@ spec.loader.exec_module(gate)  # reuse its date and section parsing; `python -I`
 
 SENT_BACK = ("CONTINUE_SAME_WORKER", "SWITCH_TO_OTHER_WORKER")
 CONFIG_VERSION = 1
-PO_DEFAULTS = {"po_pending_files": ["PO_PENDING.md"], "po_item_pattern": r"^\s*ID\s*:\s*(OD|ACT)-\w+",
+PO_DEFAULTS = {"po_pending_files": ["PO_PENDING.md"], "po_item_pattern": r"^\s*ID\s*:\s*(OD|ACT|CH)-\w+",
                "po_open_pattern": r"^\s*STATUS\s*:\s*open\b"}
 CREATED = re.compile(r"\bCREATED\s*:\s*(\d{4}-\d{2}-\d{2})")
 RUN_VERSION = 1
@@ -414,7 +415,7 @@ def director_report(a, ap):
 
     print(f"# 成效數字\n\n範圍：{f'{a.since} 起' if a.since else '全部'}。數字是檔案裡記下的次數，沒記的事不會被算到。\n")
     print("| 指標 | 數字 | 來源 |\n|---|---|---|")
-    print("| 額度用量 | UNKNOWN：跑 `dsh_usage.py` | DSH session 紀錄（本工具不讀） |")
+    print("| 額度用量 | UNKNOWN：跑 `usage_report.py` | 對話紀錄（本工具不讀） |")
     print(f"| 返工次數 | {rework} | 裁決 {len(verdicts)} 份、工單 {len(orders)} 份 |")
     print(f"| 中斷後遺失的工作 | {lost} | DIRECTOR_LOG 的 `RESUMED ... redo=` |")
     print(f"| PO 介入次數 | {po} | {'、'.join(po_files)} |")

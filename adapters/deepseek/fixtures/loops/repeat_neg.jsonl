@@ -1,0 +1,57 @@
+{"createdAt": 1700000000000, "cwd": "/home/dw/fixture", "id": "session-fx-repeat_neg", "seq": 0, "time": 1700000000000, "type": "session"}
+{"data": {"arguments": {"command": "git status --short"}, "name": "pwsh", "subCallId": "s1"}, "seq": 1, "time": 1700000001000, "type": "tool/ptc-dispatch-start"}
+{"data": {"arguments": {"command": "git status --short"}, "content": [{"text": "M file0.txt", "type": "text"}], "isError": false, "name": "pwsh", "subCallId": "s1"}, "seq": 2, "time": 1700000002000, "type": "tool/ptc-dispatch"}
+{"data": {"arguments": {"command": "git status --short"}, "name": "pwsh", "subCallId": "s3"}, "seq": 3, "time": 1700000003000, "type": "tool/ptc-dispatch-start"}
+{"data": {"arguments": {"command": "git status --short"}, "content": [{"text": "M file1.txt", "type": "text"}], "isError": false, "name": "pwsh", "subCallId": "s3"}, "seq": 4, "time": 1700000004000, "type": "tool/ptc-dispatch"}
+{"data": {"arguments": {"path": "notes/page0.md"}, "name": "read", "subCallId": "s5"}, "seq": 5, "time": 1700000005000, "type": "tool/ptc-dispatch-start"}
+{"data": {"arguments": {"path": "notes/page0.md"}, "content": [{"text": "page 0", "type": "text"}], "isError": false, "name": "read", "subCallId": "s5"}, "seq": 6, "time": 1700000006000, "type": "tool/ptc-dispatch"}
+{"data": {"arguments": {"path": "notes/page1.md"}, "name": "read", "subCallId": "s7"}, "seq": 7, "time": 1700000007000, "type": "tool/ptc-dispatch-start"}
+{"data": {"arguments": {"path": "notes/page1.md"}, "content": [{"text": "page 1", "type": "text"}], "isError": false, "name": "read", "subCallId": "s7"}, "seq": 8, "time": 1700000008000, "type": "tool/ptc-dispatch"}
+{"data": {"arguments": {"path": "notes/page2.md"}, "name": "read", "subCallId": "s9"}, "seq": 9, "time": 1700000009000, "type": "tool/ptc-dispatch-start"}
+{"data": {"arguments": {"path": "notes/page2.md"}, "content": [{"text": "page 2", "type": "text"}], "isError": false, "name": "read", "subCallId": "s9"}, "seq": 10, "time": 1700000010000, "type": "tool/ptc-dispatch"}
+{"data": {"arguments": {"path": "notes/page3.md"}, "name": "read", "subCallId": "s11"}, "seq": 11, "time": 1700000011000, "type": "tool/ptc-dispatch-start"}
+{"data": {"arguments": {"path": "notes/page3.md"}, "content": [{"text": "page 3", "type": "text"}], "isError": false, "name": "read", "subCallId": "s11"}, "seq": 12, "time": 1700000012000, "type": "tool/ptc-dispatch"}
+{"data": {"arguments": {"path": "notes/page4.md"}, "name": "read", "subCallId": "s13"}, "seq": 13, "time": 1700000013000, "type": "tool/ptc-dispatch-start"}
+{"data": {"arguments": {"path": "notes/page4.md"}, "content": [{"text": "page 4", "type": "text"}], "isError": false, "name": "read", "subCallId": "s13"}, "seq": 14, "time": 1700000014000, "type": "tool/ptc-dispatch"}
+{"data": {"arguments": {"path": "notes/page5.md"}, "name": "read", "subCallId": "s15"}, "seq": 15, "time": 1700000015000, "type": "tool/ptc-dispatch-start"}
+{"data": {"arguments": {"path": "notes/page5.md"}, "content": [{"text": "page 5", "type": "text"}], "isError": false, "name": "read", "subCallId": "s15"}, "seq": 16, "time": 1700000016000, "type": "tool/ptc-dispatch"}
+{"data": {"arguments": {"path": "notes/page6.md"}, "name": "read", "subCallId": "s17"}, "seq": 17, "time": 1700000017000, "type": "tool/ptc-dispatch-start"}
+{"data": {"arguments": {"path": "notes/page6.md"}, "content": [{"text": "page 6", "type": "text"}], "isError": false, "name": "read", "subCallId": "s17"}, "seq": 18, "time": 1700000018000, "type": "tool/ptc-dispatch"}
+{"data": {"arguments": {"path": "notes/page7.md"}, "name": "read", "subCallId": "s19"}, "seq": 19, "time": 1700000019000, "type": "tool/ptc-dispatch-start"}
+{"data": {"arguments": {"path": "notes/page7.md"}, "content": [{"text": "page 7", "type": "text"}], "isError": false, "name": "read", "subCallId": "s19"}, "seq": 20, "time": 1700000020000, "type": "tool/ptc-dispatch"}
+{"data": {"arguments": {"path": "notes/page8.md"}, "name": "read", "subCallId": "s21"}, "seq": 21, "time": 1700000021000, "type": "tool/ptc-dispatch-start"}
+{"data": {"arguments": {"path": "notes/page8.md"}, "content": [{"text": "page 8", "type": "text"}], "isError": false, "name": "read", "subCallId": "s21"}, "seq": 22, "time": 1700000022000, "type": "tool/ptc-dispatch"}
+{"data": {"arguments": {"path": "notes/page9.md"}, "name": "read", "subCallId": "s23"}, "seq": 23, "time": 1700000023000, "type": "tool/ptc-dispatch-start"}
+{"data": {"arguments": {"path": "notes/page9.md"}, "content": [{"text": "page 9", "type": "text"}], "isError": false, "name": "read", "subCallId": "s23"}, "seq": 24, "time": 1700000024000, "type": "tool/ptc-dispatch"}
+{"data": {"arguments": {"path": "notes/page10.md"}, "name": "read", "subCallId": "s25"}, "seq": 25, "time": 1700000025000, "type": "tool/ptc-dispatch-start"}
+{"data": {"arguments": {"path": "notes/page10.md"}, "content": [{"text": "page 10", "type": "text"}], "isError": false, "name": "read", "subCallId": "s25"}, "seq": 26, "time": 1700000026000, "type": "tool/ptc-dispatch"}
+{"data": {"arguments": {"path": "notes/page11.md"}, "name": "read", "subCallId": "s27"}, "seq": 27, "time": 1700000027000, "type": "tool/ptc-dispatch-start"}
+{"data": {"arguments": {"path": "notes/page11.md"}, "content": [{"text": "page 11", "type": "text"}], "isError": false, "name": "read", "subCallId": "s27"}, "seq": 28, "time": 1700000028000, "type": "tool/ptc-dispatch"}
+{"data": {"arguments": {"path": "notes/page12.md"}, "name": "read", "subCallId": "s29"}, "seq": 29, "time": 1700000029000, "type": "tool/ptc-dispatch-start"}
+{"data": {"arguments": {"path": "notes/page12.md"}, "content": [{"text": "page 12", "type": "text"}], "isError": false, "name": "read", "subCallId": "s29"}, "seq": 30, "time": 1700000030000, "type": "tool/ptc-dispatch"}
+{"data": {"arguments": {"path": "notes/page13.md"}, "name": "read", "subCallId": "s31"}, "seq": 31, "time": 1700000031000, "type": "tool/ptc-dispatch-start"}
+{"data": {"arguments": {"path": "notes/page13.md"}, "content": [{"text": "page 13", "type": "text"}], "isError": false, "name": "read", "subCallId": "s31"}, "seq": 32, "time": 1700000032000, "type": "tool/ptc-dispatch"}
+{"data": {"arguments": {"path": "notes/page14.md"}, "name": "read", "subCallId": "s33"}, "seq": 33, "time": 1700000033000, "type": "tool/ptc-dispatch-start"}
+{"data": {"arguments": {"path": "notes/page14.md"}, "content": [{"text": "page 14", "type": "text"}], "isError": false, "name": "read", "subCallId": "s33"}, "seq": 34, "time": 1700000034000, "type": "tool/ptc-dispatch"}
+{"data": {"arguments": {"path": "notes/page15.md"}, "name": "read", "subCallId": "s35"}, "seq": 35, "time": 1700000035000, "type": "tool/ptc-dispatch-start"}
+{"data": {"arguments": {"path": "notes/page15.md"}, "content": [{"text": "page 15", "type": "text"}], "isError": false, "name": "read", "subCallId": "s35"}, "seq": 36, "time": 1700000036000, "type": "tool/ptc-dispatch"}
+{"data": {"arguments": {"path": "notes/page16.md"}, "name": "read", "subCallId": "s37"}, "seq": 37, "time": 1700000037000, "type": "tool/ptc-dispatch-start"}
+{"data": {"arguments": {"path": "notes/page16.md"}, "content": [{"text": "page 16", "type": "text"}], "isError": false, "name": "read", "subCallId": "s37"}, "seq": 38, "time": 1700000038000, "type": "tool/ptc-dispatch"}
+{"data": {"arguments": {"path": "notes/page17.md"}, "name": "read", "subCallId": "s39"}, "seq": 39, "time": 1700000039000, "type": "tool/ptc-dispatch-start"}
+{"data": {"arguments": {"path": "notes/page17.md"}, "content": [{"text": "page 17", "type": "text"}], "isError": false, "name": "read", "subCallId": "s39"}, "seq": 40, "time": 1700000040000, "type": "tool/ptc-dispatch"}
+{"data": {"arguments": {"path": "notes/page18.md"}, "name": "read", "subCallId": "s41"}, "seq": 41, "time": 1700000041000, "type": "tool/ptc-dispatch-start"}
+{"data": {"arguments": {"path": "notes/page18.md"}, "content": [{"text": "page 18", "type": "text"}], "isError": false, "name": "read", "subCallId": "s41"}, "seq": 42, "time": 1700000042000, "type": "tool/ptc-dispatch"}
+{"data": {"arguments": {"path": "notes/page19.md"}, "name": "read", "subCallId": "s43"}, "seq": 43, "time": 1700000043000, "type": "tool/ptc-dispatch-start"}
+{"data": {"arguments": {"path": "notes/page19.md"}, "content": [{"text": "page 19", "type": "text"}], "isError": false, "name": "read", "subCallId": "s43"}, "seq": 44, "time": 1700000044000, "type": "tool/ptc-dispatch"}
+{"data": {"arguments": {"path": "notes/page20.md"}, "name": "read", "subCallId": "s45"}, "seq": 45, "time": 1700000045000, "type": "tool/ptc-dispatch-start"}
+{"data": {"arguments": {"path": "notes/page20.md"}, "content": [{"text": "page 20", "type": "text"}], "isError": false, "name": "read", "subCallId": "s45"}, "seq": 46, "time": 1700000046000, "type": "tool/ptc-dispatch"}
+{"data": {"arguments": {"path": "notes/page21.md"}, "name": "read", "subCallId": "s47"}, "seq": 47, "time": 1700000047000, "type": "tool/ptc-dispatch-start"}
+{"data": {"arguments": {"path": "notes/page21.md"}, "content": [{"text": "page 21", "type": "text"}], "isError": false, "name": "read", "subCallId": "s47"}, "seq": 48, "time": 1700000048000, "type": "tool/ptc-dispatch"}
+{"data": {"arguments": {"path": "notes/page22.md"}, "name": "read", "subCallId": "s49"}, "seq": 49, "time": 1700000049000, "type": "tool/ptc-dispatch-start"}
+{"data": {"arguments": {"path": "notes/page22.md"}, "content": [{"text": "page 22", "type": "text"}], "isError": false, "name": "read", "subCallId": "s49"}, "seq": 50, "time": 1700000050000, "type": "tool/ptc-dispatch"}
+{"data": {"arguments": {"path": "notes/page23.md"}, "name": "read", "subCallId": "s51"}, "seq": 51, "time": 1700000051000, "type": "tool/ptc-dispatch-start"}
+{"data": {"arguments": {"path": "notes/page23.md"}, "content": [{"text": "page 23", "type": "text"}], "isError": false, "name": "read", "subCallId": "s51"}, "seq": 52, "time": 1700000052000, "type": "tool/ptc-dispatch"}
+{"data": {"arguments": {"path": "notes/page24.md"}, "name": "read", "subCallId": "s53"}, "seq": 53, "time": 1700000053000, "type": "tool/ptc-dispatch-start"}
+{"data": {"arguments": {"path": "notes/page24.md"}, "content": [{"text": "page 24", "type": "text"}], "isError": false, "name": "read", "subCallId": "s53"}, "seq": 54, "time": 1700000054000, "type": "tool/ptc-dispatch"}
+{"data": {"arguments": {"command": "git status --short"}, "name": "pwsh", "subCallId": "s55"}, "seq": 55, "time": 1700000055000, "type": "tool/ptc-dispatch-start"}
+{"data": {"arguments": {"command": "git status --short"}, "content": [{"text": "clean", "type": "text"}], "isError": false, "name": "pwsh", "subCallId": "s55"}, "seq": 56, "time": 1700000056000, "type": "tool/ptc-dispatch"}

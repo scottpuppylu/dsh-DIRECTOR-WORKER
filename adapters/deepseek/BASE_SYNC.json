@@ -1,0 +1,32 @@
+{
+  "schema": "dw-base-sync/1",
+  "adapter": "adapters/deepseek/",
+  "overrides": {
+    "README.md": {
+      "why": "variant README (templates/VARIANT_README.md, D8): what dshdw is, the series table, 新增 / 沿用上游 / 拿掉, cross-variant borrowing, install for DeepSeek Harness (details in adapters/deepseek/README.md)",
+      "base_sha256": "33ec0cce4dcab786711dfe438a3ee180a33d5e5144cbf6bb14c5f9034f3e5755"
+    },
+    "CHANGELOG.md": {
+      "why": "the variant's own history (3.0.0-ds.8 with the upstream handling table, then the dsh history up to 2.6.0-ds.7); the base history is kept byte for byte in CHANGELOG-upstream.md",
+      "base_sha256": "75f71e10d130fbd1bd69a12c2b7996d411f9bdacf7e6c4ace16853850b7bfcbe"
+    },
+    "VERSION": {
+      "why": "the variant version 3.0.0-ds.8 (the serial continues from 2.6.0-ds.7, PO 2026-11-28); the base version is in BASE_VERSION",
+      "base_sha256": "2985be8b28d3ade858e8d8fb4bc22f565b1bf6020dff982dce141f7721b9999c"
+    },
+    "tools/selftest.py": {
+      "why": "only the README needles of test_onboarding_v210 and PO_PAGE_WANTED name the DSH sentences (no Claude PO page, no docs/11; same kind of change as cdxdw); every other check is the base's (base 3.0.0 B15 / B16 / B19 read BASE_VERSION, CHANGELOG-upstream.md and adapters/deepseek/VARIANT.json themselves)",
+      "base_sha256": "775bdb5fb602ce596e27539adc9c014634b6fe65b18f6f684206ecb82bb502d0"
+    }
+  },
+  "not_ported": {},
+  "variant_files": {
+    "BASE_VERSION": "the base release this variant carries (base_sync_check compares it with the base VERSION)",
+    "CHANGELOG-upstream.md": "byte copy of the base CHANGELOG.md at BASE_VERSION",
+    ".github/workflows/deepseek-adapter.yml": "CI for the DeepSeek adapter: selftest_deepseek.py and base_sync_check.py against the base release in BASE_VERSION, Windows and Ubuntu on Python 3.9 and 3.12; a file of its own so selftest.yml stays the base's"
+  },
+  "variant_rules": {
+    "dispatch through dsh_dispatch.py": "DSH has no hook before a tool call, so R6 is kept by adapters/deepseek/dsh_dispatch.py (spec_gate check, gate_check --hash, worktree.py open; GO only on exit 0 of each) and by gate_check / dispatch_check exiting non-zero after the fact; the rule is in AGENTS_PROJECT_SECTION.md and the README 新增",
+    "Claude-only base files kept": "hook_guard.py, setup_project_settings.py, poll_hint.py, doctor.py, context_probe.py, usage_report.py, usage_mix.py, transcript_audit.py, choice_reconcile.py, browser_check.py, tools/container/, docs/11_claude_desktop.md and the Claude templates are byte copies that DSH does not run (README 拿掉); the DSH replacements are in adapters/deepseek/"
+  }
+}

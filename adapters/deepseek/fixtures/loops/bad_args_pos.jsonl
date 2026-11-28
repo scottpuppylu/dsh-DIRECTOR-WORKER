@@ -1,0 +1,9 @@
+{"createdAt": 1700000000000, "cwd": "/home/dw/fixture", "id": "session-fx-bad_args_pos", "seq": 0, "time": 1700000000000, "type": "session"}
+{"data": {"arguments": {"old": 5, "path": "docs/guide.md"}, "name": "edit", "subCallId": "s1"}, "seq": 1, "time": 1700000001000, "type": "tool/ptc-dispatch-start"}
+{"data": {"arguments": {"old": 5, "path": "docs/guide.md"}, "content": [{"text": "old must be a string", "type": "text"}], "error": {"code": "INVALID_ARGS", "name": "ToolArgsError"}, "isError": true, "name": "edit", "subCallId": "s1"}, "seq": 2, "time": 1700000002000, "type": "tool/ptc-dispatch"}
+{"data": {"arguments": "{\"code\": \"print(1)\"", "callId": "c3", "name": "run_code"}, "seq": 3, "time": 1700000003000, "type": "tool/call"}
+{"data": {"error": {"code": "CODE_RUN_FAILED", "name": "CodeRunFailedError"}, "message": {"content": [{"text": "cannot parse arguments", "type": "text"}], "isError": true, "toolCallId": "c3"}}, "seq": 4, "time": 1700000004000, "type": "tool/result"}
+{"data": {"arguments": {"path": "docs/guide.md"}, "name": "read", "subCallId": "s5"}, "seq": 5, "time": 1700000005000, "type": "tool/ptc-dispatch-start"}
+{"data": {"arguments": {"path": "docs/guide.md"}, "content": [{"text": "# Guide", "type": "text"}], "isError": false, "name": "read", "subCallId": "s5"}, "seq": 6, "time": 1700000006000, "type": "tool/ptc-dispatch"}
+{"data": {"arguments": {"old": 6, "path": "docs/guide.md"}, "name": "edit", "subCallId": "s7"}, "seq": 7, "time": 1700000007000, "type": "tool/ptc-dispatch-start"}
+{"data": {"arguments": {"old": 6, "path": "docs/guide.md"}, "content": [{"text": "old must be a string", "type": "text"}], "error": {"code": "INVALID_ARGS", "name": "ToolArgsError"}, "isError": true, "name": "edit", "subCallId": "s7"}, "seq": 8, "time": 1700000008000, "type": "tool/ptc-dispatch"}

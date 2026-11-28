@@ -1,0 +1,43 @@
+# The DeepSeek Harness adapter's own checks (3.0.0-ds.8). A file of its own, so the base workflow selftest.yml stays
+# byte for byte the base's (base_sync_check compares it like every other base file).
+# Third-party actions are pinned to a commit SHA; the comment names the release.
+name: deepseek-adapter
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  # selftest_deepseek.py tests the adapter tools (dsh_dispatch fail-closed, dsh_setup_check, ds_version, release_ds,
+  # the light default, base_sync_check, install_deepseek, dsh_usage, dsh_audit, dsh_guard, dsh_doctor, verify_dsh_run);
+  # it needs git, no DSH and no Node. base_sync_check.py compares this variant with the base release named in
+  # BASE_VERSION (tag v<BASE_VERSION> of the base repo): a base file changed here without an override, or an override
+  # older than its base file (OVERRIDE_STALE), fails the job.
+  deepseek-adapter:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # pinned, not ubuntu-latest: on 2026-11-07 latest became 26.04, which has no Python 3.9 build for setup-python (same as
+        # the base selftest.yml); a moving image would silently drop a version of the matrix.
+        os: [windows-latest, ubuntu-24.04]
+        python: ["3.9", "3.12"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: selftest_deepseek
+        run: python -I -X utf8 adapters/deepseek/selftest_deepseek.py
+      - name: base release named in BASE_VERSION
+        shell: bash
+        run: git clone --quiet --depth 1 --branch "v$(tr -d '\r\n' < BASE_VERSION)" https://github.com/scottpuppylu/DIRECTOR-WORK.git "$RUNNER_TEMP/dw-base"
+      - name: base_sync_check
+        shell: bash
+        run: python -I -X utf8 adapters/deepseek/base_sync_check.py --base "$RUNNER_TEMP/dw-base"

@@ -7,21 +7,20 @@ Passing means the file follows the format and the rules below. It does not mean 
 evidence and the product is still the Director's job (docs/02, docs/07).
 
   --resume   the four header lines come first, in order, filled in; UPDATED holds a date.
-             2.2.2-ds.3 (upstream 2.2.2, shadow): a file over resume.max_bytes (default 20480) or with a line over
-             resume.max_line_bytes (default 4096) gets `~ shadow: RESUME_SIZE <bytes> ... ~<tokens> tokens, longest
-             line <n>: <bytes>`; the exit code stays the same, --strict makes it fail. The limits come from --config
-             director_work.json, else a director_work.json beside the file, else the defaults (memory_size_check.py
-             holds the rule)
+             2.2.2 (shadow): a file over resume.max_bytes (default 20480) or with a line over resume.max_line_bytes
+             (default 4096) gets `~ shadow: RESUME_SIZE <bytes> ... ~<tokens> tokens, longest line <n>: <bytes>`; the
+             exit code stays the same, --strict makes it fail. The limits come from --config director_work.json, else
+             a director_work.json beside the file, else the defaults (memory_size_check.py holds the rule)
   --order    required fields filled in; SCOPE / FORBIDDEN are concrete path lists; acceptance rows are concrete;
              an optional `CHECKS:` list holds one `- AC-n: ["program", "arg"]` line (JSON array of strings) per AUTO
              criterion: the check the Director approves, locked by the dispatch hash. A Strict order with an AUTO
              criterion and no check is noted. An optional `REQUIRED_CHANGES:` list (globs the work must change, read
-             by scope_check.py) must lie inside SCOPE and outside FORBIDDEN, or the order cannot be done
-             2.2.2-ds.3: the BASE_REF commit is compared with the remote branch after a git fetch (in --repo, default
-             the current folder): missing or behind prints `~ WARN BASE_REF`, --strict-base makes it fail; a failed
-             fetch says it did not compare with the remote. Switches: "base_ref" {"check", "fetch", "strict"} in
-             --config, else the director_work.json in the order's folder or the one above it; a switch that is not
-             true / false is a note and its default is kept (upstream 2.2.2)
+             by scope_check.py) must lie inside SCOPE and outside FORBIDDEN, or the order cannot be done.
+             2.2.2: BASE_REF freshness. The BASE_REF commit is compared with its remote branch after a git fetch in
+             --repo (default: the order's folder): a commit that is missing or behind prints `~ WARN BASE_REF ...`,
+             --strict-base makes it fail. A fetch that fails, or a folder that is not a git checkout, says it did not
+             compare (never a silent pass). Switches: "base_ref" {"check", "fetch", "strict"} in --config, else the
+             director_work.json in the order's folder or the one above it
   --report   required fields filled in; RESULT in the vocabulary; PASS is refused with NOT_RUN tests or a scope violation
   --test-request
              every field of templates/TEST_REQUEST.md filled; BUILD_GB, CACHE_GB and WRITE_GB in GiB, not GB;
@@ -67,11 +66,16 @@ evidence and the product is still the Director's job (docs/02, docs/07).
              The report's `ORDER: <file> REVISION n` line must name the order's REVISION; without a revision Strict
              fails and Standard notes it.
   --report-skeleton ORDER [--repo DIR] [--evidence-dir DIR] [--out FILE]
-             2.2.2-ds.3: print a TASK REPORT for ORDER with what the order fixes filled in (TASK_ID, worker, model,
-             BASE, ORDER line, ORDER_SHA256, one ACCEPTANCE row per AC with the statuses its type allows) and
-             `<...>` for the rest, then the commands that finish the job: evidence_record.py run per CHECKS line,
-             scope_check.py, --match. --out writes the skeleton to a new file. An unfilled skeleton fails --report
-  --hash FILE  print the SHA-256 that ORDER_SHA256 compares (line endings counted as LF) and the DISPATCH line to log
+             3.0.0 B8 (from dshdw 2.2.2-ds.3): print a TASK REPORT for ORDER with what the order fixes filled in
+             (TASK_ID, worker, MODEL (EFFORT), BASE, ORDER line, ORDER_SHA256, the WORKTREE line, one ACCEPTANCE row
+             per AC with the statuses its type allows) and `<...>` for the rest, then the commands that finish the
+             job: evidence_record.py run per CHECKS line, scope_check.py --candidate, --match. --out writes the
+             skeleton to a new file (an existing one is refused) and prints only the commands. An unfilled
+             skeleton fails --report (placeholder left).
+  --hash FILE  print the SHA-256 that ORDER_SHA256 compares (line endings counted as LF) and the DISPATCH line to log.
+             3.0.0 (R6, hard line): for a work order the DISPATCH line comes only when tools/spec_gate.py passes for
+             its brief (--brief, else BRIEF.md in the order's folder, its DIRECTOR/, or above an orders/ folder); else
+             `FAIL SPEC_GATE`, exit 1
   --preflight REPORT ORDER
              before moving a review made with an older version to this one: list, one `LACKS` line each, what the
              report, order, evidence and dispatch log lack for a Strict review now (a HEAD that is not 40 hex digits, a
@@ -80,10 +84,6 @@ evidence and the product is still the Director's job (docs/02, docs/07).
              With --repo, a short HEAD is resolved there to the full commit (when it is unique). Takes
              --evidence-dir and --dispatch-log; what they would show is NOT_CHECKED without them. Exit 1 when
              anything is lacking. Only reads, like every check here.
-
-2.2.3-ds.3 (shadow): --order on an order at REVISION 2 or later notes to sync BRIEF.md, WORK_DIR/tasks.md and
-             WORK_DIR/RESUME_STATE.md, and prints `~ shadow: REVISION_SYNC <file>` for each of those WORK_DIR files
-             last written before the order (older modification time). Never changes the exit code.
 
 2.1 (shadow: these only add `~` notes and never change the exit code; an order without the new fields passes as before):
   --brief BRIEF.md
@@ -106,6 +106,7 @@ evidence and the product is still the Director's job (docs/02, docs/07).
              the PO's acceptance records (schema po-acceptance-v1: candidate_id, commit, entry, entry_sha256,
              manifest_sha256, offered_message_ref, reply_ref, outcome seen / changes / accepted / null, replied_at,
              excerpt); a record missing a binding is `~ UNBOUND_PO_REPLY`. With --candidate the commit must be it.
+             3.0.0 (G2): a file that is empty or not JSON is FAIL (`INVALID PO_ACCEPTANCE file`), not a note.
              2.2 (F09): the product is checked too, from --artifact-root (default: the record file's folder): the
              entry must be a file inside it, with entry_sha256 when the record has it; an optional `manifest` path
              must hash to manifest_sha256. A missing or changed file, an entry outside the root, or one reply_ref used
@@ -118,18 +119,6 @@ evidence and the product is still the Director's job (docs/02, docs/07).
              trace_report reads it as 總監重跑過.
   A verdict may carry `ORDER_SHA256:` and `REPORT_SHA256:` (gate_check.py --hash of each file); with --match a
              mismatch is `~ VERDICT_RECORD`.
-
-Safety gates (ds.2 SDD; 2.2.5-ds.5 WO-DS-009 B1: OpenSpec removed, the gates kept; switches in director_work.json
-"safety", all on by default; the checks live in safety_gate.py next to this file, docs/13):
-  --order / --match on a Standard or Strict order: `TESTS_LOCKED:` lists the acceptance tests written before
-             dispatch with their sha256; a changed one fails. STOP_RULES may not allow more rounds than
-             safety.stop_after_rounds (1). A safety gate turned off, or stop_after_rounds raised above 1, needs the
-             PO's answer in PO_PENDING.md; prefer_auto off is only a note.
-  --match on a Standard or Strict order: the SPEC_REVIEW of the order (--dispatch-log, else DIRECTOR_LOG.md or
-             reviews/); with --dispatch-log also `PLAN_APPROVED <WO-ID> sha=<64 hex>`, and <WORK_DIR>/<WO>/PLAN.md
-             may differ from the approved plan only by ticked boxes, all ticked.
-  An old "sdd" block is read without error; its WARN lines are notes. --config FILE: director_work.json (default:
-             the order's folder/../director_work.json).
 
 The hash only detects a changed order after the fact; it cannot stop anyone from editing it. An evidence record shows
 a command ran and passed, not that it tests the right thing.
@@ -159,7 +148,7 @@ Lines starting with `~` are notes for the newer format (v0.10): they never fail 
                after the work began); no approval line at all fails. A log time without a zone is read in the
                commit's zone. No commit, or no time for the approval, is a NOT_CHECKED note.
              - its own spec review: a whole line `SPEC_REVIEW <WO-ID> tokens=.. issues=.. adopted=..` in the log, else
-               a reviews/*SPEC_REVIEW* file whose name holds the ID (ported from dshdw's ds.4 B4). None
+               a reviews/*SPEC_REVIEW* file whose name holds the ID (ported from the DeepSeek port's ds.4 B4). None
                fails; a line without the three fields is noted.
              - the reviews come from other sessions: the spec review's session (`session=<id>` on its line, or
                `SESSION_ID:` in its file) must differ from the author's (`session=` on the DISPATCH line, or
@@ -169,15 +158,23 @@ Lines starting with `~` are notes for the newer format (v0.10): they never fail 
   --final DIR
              final acceptance of the DIRECTOR folder DIR (or a folder holding DIRECTOR/): FAIL without end-to-end
              evidence, a non-empty file in evidence/E2E/ (the lead ran the spec's scenarios once through the product's
-             public entry point). Notes (never fail): an E2E record without an `ENTRY_POINT:` line, a
+             public entry point). 3.0.0 (D2, from dshdw 2.6.0-ds.7, a hard line): the run must have ended, and ended
+             well. Each record is read as UTF-8 text (one that is not: FAIL, keep only text logs there); a record with
+             a non-zero exit code (`EXIT_CODE: 1`, `exit=1`, `Command exited with code 1`) or a line starting with
+             FAIL, FAILED, ERROR: or a Python traceback FAILs; and at least one record must show an explicit completed
+             outcome, `EXIT_CODE: 0` (or `exit=0`) or `RESULT: PASS` (RESULT / STATUS / VERDICT, PASS / OK / SUCCESS),
+             else `E2E_INCOMPLETE`. An old failed record left in evidence/E2E/ keeps blocking: move it out (to
+             evidence/E2E_old/, say) after the fixed run. --warn does not soften these. Notes (never fail): an E2E
+             record without an `ENTRY_POINT:` line, a
              DECISION_REGISTER.md table of DD rows without a 驗收案例 column, and each DD row (not SUPERSEDED) whose
              驗收案例 cell is empty: `~ WARN DD_CASE`.
+             3.0.0 B12 (from agy 2.6.0-agy.5): `--skip-old-e2e` leaves out the E2E records whose `CANDIDATE:`
+             names a commit other than DELIVERY.json's candidate (one `~ E2E_SKIPPED` note each; all of them old: FAIL,
+             no record for the delivered commit). Off by default: without it an old record still counts and blocks.
+             3.0.0 (C2 hard line, C4): also tools/delivery.py check of DIR's evidence/DELIVERY.json (no record is
+             NO_DELIVERY): the delivered commit is the verified candidate and the delivered files are unchanged
+             (against --repo, default the checkout holding DIR), every condition is judged in every environment.
 
-2.2.5-ds.5 (WO-DS-009 B2) adds to the --final above:
-  --final DIRECTOR [--usage FILE]
-             the usage file: --usage FILE, else DIRECTOR/usage.json, written by `dsh_usage.py --out` as the lead's last
-             step (BOOTSTRAP 「收尾」). Missing, unreadable or NO_DATA prints `~ WARN USAGE` and the exit code stays
-             the same; a readable file prints `ok USAGE`. Only reads.
 2.3.0 (N2, feasibility before a fix set or a frozen gate):
   --feasibility RECORD [RECORD ...]
              before a fix set opens, or a gate's numbers are frozen, a CPU feasibility search must have run. The record
@@ -191,6 +188,19 @@ Lines starting with `~` are notes for the newer format (v0.10): they never fail 
              config key "verdict_self_check": "warn" (default in 2.3.x: a `~ WARN SELF_CHECK` note, exit code
              unchanged) or "fail" (the verdict fails). Config: --config, else director_work.json in the verdict's
              folder or the one above it.
+
+3.0.0 (D1, safety gates; tools/safety_gate.py holds the rules, merged from dshdw ds.7 and agydw):
+  --order / --match of a Standard / Strict order (Direct is not gated) also run the safety gates of the strength in
+             director_work.json ("strength": light | standard | strict, default standard; --config, else the file in
+             the order's folder or the one above it). light: none; standard: tests_first; strict: tests_first,
+             plan_gate, spec_review_for_standard, stop_after_rounds 1, prefer_auto. tests_first: the order carries
+             TESTS_LOCKED (`- <path> sha256=<64>`, the path may hold spaces and be quoted, or `- NONE  # why`) and a
+             locked test whose hash changed fails; with --match --candidate the test is read from the candidate commit
+             in --repo (default the current folder). spec_review_for_standard: --match needs the order's SPEC_REVIEW
+             (--dispatch-log, else DIRECTOR_LOG.md of the order's DIRECTOR folder, else a reviews/*SPEC_REVIEW* file).
+             plan_gate: --match with --dispatch-log needs `PLAN_APPROVED <WO> sha=<plan hash>`. A worker may not
+             loosen them: strength light or a switch looser than its strength fails unless a PO_PENDING entry naming
+             it is answered; a value of the wrong type or an unreadable director_work.json fails.
 
 Bringing in a project that already has files in another format:
   --warn          print WARN instead of FAIL and exit 0, so old files do not block work
@@ -417,58 +427,29 @@ def order_line(text):
     return line.group(1), (int(rev.group(1)) if rev else None)
 
 
-def checks_line_numbers(text):
-    """2.2.4-ds.4 (B3): the 1-based line number of each `- ` item under the order's `CHECKS:` line, in order."""
-    lines = text.splitlines()
-    for n, line in enumerate(lines):
-        if re.fullmatch(r"\s*CHECKS\s*[:：]\s*", line):
-            out = []
-            for k in range(n + 1, len(lines)):
-                if not re.match(r"\s*-\s+", lines[k]):
-                    break
-                out.append(k + 1)
-            return out
-    return []
-
-
 def order_checks(text, problems=None):
     """{AC id: command} from the order's `CHECKS:` list, one `- AC-1: ["program", "arg", ...]` line per AUTO criterion
     (a JSON array of strings, run without a shell); None when the order has no CHECKS. With a problems list, records a
-    line that is not in that form and an AC listed twice (the first line wins). 2.2.4-ds.4 (B3, WO-DS-006 #3): each
-    problem names the line, and a Windows path written with backslashes gets its own message: in JSON `\w` is no
-    escape at all (invalid), and `\t` `\n` `\b` `\f` `\r` silently become control characters."""
+    line that is not in that form and an AC listed twice (the first line wins)."""
     items = parse_list(text, "CHECKS")
     if items is None:
         return None
-    numbers = checks_line_numbers(text)
     checks = {}
-    for n, item in enumerate(items):
-        where = f"CHECKS line {numbers[n]}" if n < len(numbers) else "CHECKS"
+    for item in items:
         m = re.fullmatch(r"(AC-[\w-]+)\s*:\s*(.+)", item)
-        error = None
         try:
             command = json.loads(m.group(2)) if m else None
-        except ValueError as failed:
-            command, error = None, failed
-        controls = isinstance(command, list) and any(isinstance(part, str) and re.search(r"[\x00-\x1f]", part)
-                                                     for part in command)
-        if m and "\\" in m.group(2) and (error is not None or controls):
-            if problems is not None:
-                bad = re.search(r'[^\s"\[\],]*\\[^\s"\[\],]*', m.group(2))
-                problems.append(f"{where} ({m.group(1)}): backslash path `{bad.group(0) if bad else '?'}` "
-                                + ("is not valid JSON" if error is not None else
-                                   "is read as a control character (\\t, \\n, ...)")
-                                + "; write the path with forward slashes (D:/folder/file.py; Windows takes them)")
-            continue
+        except ValueError:
+            command = None
         if not (isinstance(command, list) and command and all(isinstance(part, str) for part in command)
                 and command[0].strip()):
             if problems is not None:
-                problems.append(f'{where}: `{item}` is not `AC-n: ["program", "arg", ...]` (a JSON array of strings; '
+                problems.append(f'CHECKS: `{item}` is not `AC-n: ["program", "arg", ...]` (a JSON array of strings; '
                                 "a ` #` starts a comment, so a command cannot hold one)")
             continue
         if m.group(1) in checks:
             if problems is not None:
-                problems.append(f"{where}: {m.group(1)} listed twice; one approved check per AC")
+                problems.append(f"CHECKS: {m.group(1)} listed twice; one approved check per AC")
             continue
         checks[m.group(1)] = command
     return checks
@@ -739,26 +720,62 @@ def carried_notes(ac, name, bound, binding, notes):
 def write_snapshot(data, folder, name):
     """(path, written) of folder/name holding data, written atomically: a temp file in the same folder, fsync, then a
     rename over the name. A file already there with the same hash is kept, so a retry writes nothing."""
-    import tempfile
-    folder = pathlib.Path(folder)
-    folder.mkdir(parents=True, exist_ok=True)
-    target = folder / name
+    import importlib.util
+    target = pathlib.Path(folder) / name
     if target.is_file() and order_hash(target.read_bytes()) == order_hash(data):
         return target, False
-    fd, tmp = tempfile.mkstemp(prefix=".snapshot-", suffix=".part", dir=str(folder))
-    try:
-        with os.fdopen(fd, "wb") as out:
-            out.write(data)
-            out.flush()
-            os.fsync(out.fileno())
-        os.replace(tmp, str(target))
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
-    return target, True
+    spec = importlib.util.spec_from_file_location("dw_common", pathlib.Path(__file__).with_name("_common.py"))
+    common = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(common)
+    return common.write_bytes_atomic(target, data), True  # 3.0.0 G1: the shared atomic write
+
+
+def is_order(text, path=None):
+    """A work order: it has the fixed block's `GOVERNANCE =` line (a report or a verdict has none), or (review P2-8:
+    a hand-written order without that line) it sits in an orders/ folder, or its file name starts with `WO-<n>` and
+    does not name a report, verdict, review, test request or resume file."""
+    if re.search(r"^[ \t]*GOVERNANCE[ \t]*=", text, re.M):
+        return True
+    if path is None:
+        return False
+    path = pathlib.Path(path)
+    if path.resolve().parent.name.lower() == "orders":
+        return True
+    return bool(re.match(r"WO-\d+(?!\d)", path.name, re.I)) and not re.search(
+        r"REPORT|VERDICT|REVIEW|REQUEST|RESUME", path.name.upper())
+
+
+def find_brief(order_path, brief=None):
+    """The brief an order serves: --brief, else BRIEF.md in the order's folder, in DIRECTOR/ beside the order, or, for
+    an order in an orders/ folder only, in the folder above (DIRECTOR/orders/ -> DIRECTOR/BRIEF.md). Any other folder
+    above is not looked at: a brief of some other project higher up must not open this order's gate."""
+    if brief:
+        return pathlib.Path(brief)
+    folder = pathlib.Path(order_path).resolve().parent
+    above = folder.name.lower() == "orders"
+    for place in (folder / "BRIEF.md", folder / "DIRECTOR" / "BRIEF.md") + ((folder.parent / "BRIEF.md",) if above else ()):
+        if place.is_file():
+            return place
+    return folder.parent / "BRIEF.md" if above else folder / "BRIEF.md"
+
+
+def load_spec_gate():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("dw_spec_gate", pathlib.Path(__file__).with_name("spec_gate.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def spec_gate_failed(order_path, brief=None):
+    """3.0.0 (R6, C1): True when the spec gate does not pass for the order's brief; prints why, indented. A hard line:
+    --warn does not soften it, and no brief at all fails."""
+    lines = []
+    code = load_spec_gate().run(find_brief(order_path, brief), out=lines.append)
+    if code:
+        print("  FAIL SPEC_GATE: no DISPATCH line until the spec passes (tools/spec_gate.py)")
+        print("\n".join("  " + line for line in lines))
+    return bool(code)
 
 
 def print_brief(path, folder=None):
@@ -919,12 +936,12 @@ def acceptance_problems(record, candidate=None):
 
 
 def check_po_acceptance(text, notes, candidate=None, root=None):
-    """PO_ACCEPTANCE.json (題4 P-2), notes only: each record bound, or UNBOUND_PO_REPLY with what it lacks.
+    """PO_ACCEPTANCE.json (題4 P-2), notes only: each record bound, or UNBOUND_PO_REPLY with what it lacks. A file with
+    no record to read (empty, not JSON) is a problem (3.0.0 G2): nothing was checked.
     root (2.2, F09): the folder the entry and manifest paths are read from; None skips the product check."""
     records, problem = acceptance_records(text)
-    if problem:
-        notes.append(f"UNBOUND_PO_REPLY file: {problem}; no record read")
-        return []
+    if problem:  # 3.0.0 (G2): no record could be read, so nothing was checked; that is never OK
+        return [f"INVALID PO_ACCEPTANCE file: {problem}; no record read"]
     if not records:
         notes.append("PO_ACCEPTANCE: no record")
     shared = shared_replies(records)
@@ -1240,179 +1257,6 @@ def evidence_module():
     import importlib.util
     path = pathlib.Path(__file__).resolve().parent / "evidence_record.py"
     spec = importlib.util.spec_from_file_location("evidence_record", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-BASE_DEFAULTS = {"check": True, "fetch": True, "strict": False}
-BASE_SHA = re.compile(r"(?:(?P<ref>[\w./-]+)\s*@\s*)?\b(?P<sha>[0-9a-fA-F]{7,40})\b")
-BRACKETED = re.compile(r"[（(][^（()）]*[)）]")
-
-
-def base_config(order_path, config_path, notes):
-    """2.2.2-ds.3 (as upstream 2.2.2): the "base_ref" switches: --config, else director_work.json in the order's
-    folder or the one above it
-    (DIRECTOR/orders/WO.md -> DIRECTOR/director_work.json). A switch that is not true / false is a note, default kept."""
-    config = dict(BASE_DEFAULTS)
-    folder = pathlib.Path(order_path).resolve().parent
-    found = [pathlib.Path(config_path)] if config_path else [f / "director_work.json" for f in (folder, folder.parent)]
-    path = next((f for f in found if f.is_file()), None)
-    if path is None:
-        return config
-    try:
-        data = json.loads(path.read_text(encoding="utf-8-sig"))
-    except (OSError, ValueError) as error:
-        notes.append(f"{path.name}: cannot read ({error}); base_ref defaults used")
-        return config
-    block = data.get("base_ref") if isinstance(data, dict) else None
-    if block is None:
-        return config
-    if not isinstance(block, dict):
-        notes.append(f"{path.name} base_ref: an object with check / fetch / strict, got {block!r}; defaults used")
-        return config
-    for key, value in block.items():
-        if key.startswith("_"):
-            continue
-        if key not in BASE_DEFAULTS:
-            notes.append(f"{path.name} base_ref.{key}: not a key this check reads (check, fetch, strict)")
-        elif not isinstance(value, bool):
-            notes.append(f"{path.name} base_ref.{key}: true or false, got {value!r}; {str(BASE_DEFAULTS[key]).lower()} used")
-        else:
-            config[key] = value
-    return config
-
-
-LONG_PATH_QUOTED = re.compile(r"""['"]([^'"\n]+)['"]""")
-LONG_PATH_BARE = re.compile(r"(\S+): Filename too long")
-WINDOWS_PATH_MAX = 259  # MAX_PATH 260 with the closing NUL
-
-
-def long_path(message, root):
-    """2.2.5 (B11): one clear line for git's `Filename too long`: which path, how long, how much over, what to do.
-    None when the message is about something else."""
-    line = next((row for row in (message or "").splitlines() if "Filename too long" in row), None)
-    if line is None:
-        return None
-    quoted = LONG_PATH_QUOTED.findall(line)
-    bare = LONG_PATH_BARE.search(line)
-    name = (next((q for q in quoted if "/" in q or "\\" in q), quoted[0]) if quoted else bare.group(1) if bare else "")
-    name = name.strip()
-    base = str(root).rstrip("/\\")
-    full = name if not name or os.path.isabs(name) else base + "/" + name
-    size = len(full)
-    over = (f"{size} characters, {size - WINDOWS_PATH_MAX} over the {WINDOWS_PATH_MAX} Windows allows"
-            if size > WINDOWS_PATH_MAX else f"{size} characters")
-    return (f"path too long for git on Windows: {full or root} ({over}); use a shorter origin / worktree folder "
-            "(for example D:/w/<name>) or `git config core.longpaths true` in that repository")
-
-
-def base_git(repo, *args, timeout=120):
-    import subprocess
-    try:
-        proc = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, encoding="utf-8",
-                              errors="replace", timeout=timeout)
-    except (OSError, subprocess.TimeoutExpired) as error:
-        return 1, str(error)
-    out = (proc.stdout if proc.returncode == 0 else (proc.stderr or proc.stdout)).strip()
-    return proc.returncode, (long_path(out, repo) or out) if proc.returncode else out
-
-
-def base_ref_problems(order_text, repo, config, notes, fetched):
-    """2.2.2-ds.3: is the order's BASE_REF commit still the tip of the remote branch? A commit that is missing or behind
-    is a `WARN BASE_REF` note, a problem with --strict-base ("strict"). A fetch that fails says so: no silent pass.
-    fetched caches one fetch per repo and remote for the whole run."""
-    if not config["check"]:
-        return []
-    m = re.search(r"^[ \t]*BASE_REF[ \t]*=[ \t]*(.*)$", order_text, re.M)
-    value = re.split(r"\s+#", m.group(1))[0].strip() if m else ""  # a trailing ` # comment` is not the ref
-    value = BRACKETED.sub(" ", value).strip()  # 2.2.5 (B10): `origin/main @ abc1234（v2.2.4）`: brackets are a comment
-    found = BASE_SHA.search(value)
-    if not found:  # no commit named (e.g. `main @ <placeholder>`): nothing to compare, and no note (as upstream 2.2.2)
-        return []
-    problems = []
-
-    def warn(message):
-        (problems if config["strict"] else notes).append(("" if config["strict"] else "WARN ") + "BASE_REF: " + message)
-        return problems
-
-    sha, ref = found.group("sha").lower(), found.group("ref") or ""
-    code, top = base_git(repo, "rev-parse", "--show-toplevel")
-    if code:
-        return warn(f"not compared with the remote: {repo} is not a git checkout (give --repo <project checkout>)")
-    code, remotes = base_git(repo, "remote")
-    remotes = remotes.split() if not code else []
-    remote, branch = None, None
-    if "/" in ref and ref.split("/", 1)[0] in remotes:
-        remote, branch = ref.split("/", 1)
-    elif remotes:
-        remote = "origin" if "origin" in remotes else remotes[0]
-        branch = ref if ref and "/" not in ref else None
-    if not remote:
-        return warn("not compared with the remote: the repository has no remote")
-    if config["fetch"]:
-        key = (top, remote)
-        if key not in fetched:
-            fetched[key] = base_git(repo, "fetch", "--quiet", remote)
-        code, message = fetched[key]
-        if code:
-            return warn(f"not compared with the remote: git fetch {remote} failed "
-                        f"({message.splitlines()[-1][:200] if message else code})")
-    else:
-        notes.append(f"BASE_REF: compared with the local copy of {remote} (\"base_ref\": {{\"fetch\": false}}); not fetched")
-    if not branch:
-        code, head = base_git(repo, "symbolic-ref", "--short", f"refs/remotes/{remote}/HEAD")
-        branch = head.split("/", 1)[1] if not code and "/" in head else "main"
-    tip_ref = f"{remote}/{branch}"
-    code, tip = base_git(repo, "rev-parse", "--verify", "-q", tip_ref + "^{commit}")
-    if code:
-        return warn(f"not compared with the remote: {tip_ref} does not exist")
-    code, full = base_git(repo, "rev-parse", "--verify", "-q", sha + "^{commit}")
-    if code:
-        return warn(f"commit {sha} does not exist in {top}" + (" (even after fetching)" if config["fetch"] else ""))
-    if full == tip:
-        notes.append(f"BASE_REF {sha} = {tip_ref} ({'fetched now' if config['fetch'] else 'local copy'})")
-        return []
-    code, behind = base_git(repo, "rev-list", "--count", f"{full}..{tip}")
-    code2, ahead = base_git(repo, "rev-list", "--count", f"{tip}..{full}")
-    behind, ahead = int(behind or 0) if not code else 0, int(ahead or 0) if not code2 else 0
-    if behind:
-        return warn(f"{sha} is {behind} commit(s) behind {tip_ref} ({tip[:10]})" + (f" and {ahead} ahead" if ahead else "")
-                    + f"; start the work from {tip_ref} (git fetch, then a branch from it) or write in the order why not")
-    notes.append(f"BASE_REF {sha} is {ahead} commit(s) ahead of {tip_ref} (not pushed yet); not stale")
-    return []
-
-
-def usage_lines(director, usage=None):
-    """2.2.5-ds.5 (WO-DS-009 B2): the lines about DIRECTOR/usage.json (or usage) for the final mode. Never a failure:
-    a missing, unreadable or NO_DATA file is `~ WARN USAGE` (the trial's token total was UNKNOWN because the lead never
-    ran `dsh_usage.py --out`)."""
-    base = pathlib.Path(director)
-    if not usage and not (base / "usage.json").exists() and (base / "DIRECTOR").is_dir():
-        base = base / "DIRECTOR"  # a folder holding DIRECTOR/, as final_problems reads it
-    usage_path = pathlib.Path(usage) if usage else base / "usage.json"
-    try:
-        data = json.loads(usage_path.read_text(encoding="utf-8-sig"))
-    except FileNotFoundError:
-        return [f"  ~ WARN USAGE: {usage_path} not found: run `dsh_usage.py --project-dir <WS> --out {usage_path}` as "
-                "the last step (BOOTSTRAP 「收尾」)"]
-    except (OSError, ValueError) as error:
-        return [f"  ~ WARN USAGE: {usage_path} unreadable: {error}"]
-    status = data.get("status") if isinstance(data, dict) else None
-    if status == "NO_DATA":
-        return [f"  ~ WARN USAGE: {usage_path} says NO_DATA ({data.get('reason', '')}); the usage cannot be compared"]
-    if not isinstance(data, dict):
-        return [f"  ~ WARN USAGE: {usage_path} is not a dsh_usage.py --out file"]
-    if data.get("partial"):
-        return [f"  ~ WARN USAGE: {usage_path} is partial (invalid token field(s); see warnings)"]
-    return [f"  ok USAGE: {usage_path}"]
-
-
-def safety_module():
-    """safety_gate.py next to this file (safety gates, order_limits, protected_tests of director_work.json)."""
-    import importlib.util
-    path = pathlib.Path(__file__).resolve().parent / "safety_gate.py"
-    spec = importlib.util.spec_from_file_location("safety_gate", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -1821,8 +1665,7 @@ SPEC_REVIEW_EVENT = re.compile(LOG_DATE + EVENT_COLUMN + r"SPEC_REVIEW[ \t]+([^\
 LOG_TIME = re.compile(r"#*[ \t]*(\d{4})-(\d{2})-(\d{2})[ T](\d{1,2}):(\d{2})(?::(\d{2}))?"
                       r"(?:[ \t]*(?:([+-])(\d{2}):?(\d{2})|(Z)))?")
 SESSION = re.compile(r"(?:^[ \t]*SESSION_ID[ \t]*[:=][ \t]*|\bsession=)`?([A-Za-z0-9][\w.:-]*)", re.M)
-# 2.2.5-ds.5: the SPEC_REVIEW fields (tokens= issues= adopted=) are checked by safety_gate.review_fields_lacking,
-# the same function --match uses; upstream keeps its own REVIEW_FIELDS here.
+REVIEW_FIELDS = ("tokens=", "issues=", "adopted=")
 
 
 def log_time(line):
@@ -1918,6 +1761,108 @@ def read_or_none(path):
         return None
 
 
+def spec_review_problems(order_text, ids, log_text, log_path, folder, notes):
+    """The order's own spec review: a whole `SPEC_REVIEW <WO-ID> tokens=.. issues=.. adopted=..` line in log_text, else a
+    reviews/*SPEC_REVIEW* file under folder whose name holds the ID (ported from the DeepSeek port's ds.4 B4). Returns
+    (problems, reviews, review files). Shared by --sequence and (3.0.0 D1) the --match spec-review gate."""
+    label = "/".join(sorted(ids))
+    reviews = [e for e in timed_events(log_text or "", SPEC_REVIEW_EVENT) if id_prefixes([e[0]]) & ids]
+    review_files = files_naming(pathlib.Path(folder), ids, "SPEC_REVIEW") if folder else []
+    problems = []
+    if reviews:
+        rest = reviews[-1][3].group(2) or ""
+        lacking = [f for f in REVIEW_FIELDS if f not in rest]
+        if lacking:
+            notes.append(f"SPEC_REVIEW {label}: the log line lacks {' '.join(lacking)}")
+    elif review_files:
+        notes.append(f"SPEC_REVIEW {label}: no log line; review file {review_files[-1].name}")
+    else:
+        problems.append(f"SPEC_REVIEW: no `SPEC_REVIEW {label} tokens=... issues=... adopted=...` line in "
+                        f"{log_path or 'any log'} and no reviews/*SPEC_REVIEW* file naming it; every Standard / Strict "
+                        "order needs its own")
+    return problems, reviews, review_files
+
+
+def safety_module():
+    """3.0.0 (D1): tools/safety_gate.py, loaded by path (-I does not import from the tool's folder)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("dw_safety_gate", pathlib.Path(__file__).with_name("safety_gate.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def safety_problems(kind, order_text, order_path, repo, config_path, log_text, log_path, candidate, notes):
+    """3.0.0 (D1): the safety gates of one Standard / Strict order for --order or --match (see safety_gate.py)."""
+    safety = safety_module()
+    if safety.governance(order_text) not in safety.GOVERNED:
+        return []
+    config, problems = safety.load_config(order_path, config_path)
+    gates = [key for key in safety.SWITCHES if safety.on(config, key)]
+    if config["strength"] != safety.DEFAULT_STRENGTH or config["_set"]:  # the default (standard, nothing set) is quiet
+        notes.append(f"SAFETY strength {config['strength']} ({'director_work.json' if config['_path'] else 'default'}): "
+                     f"{', '.join(gates) or 'no gate on'}")
+    problems += safety.order_problems(order_text, repo, config, notes, candidate if kind == "match" else None)
+    if kind != "match":
+        return problems
+    ids = id_prefixes(order_ids(order_text, order_path)) or {pathlib.Path(order_path).stem.upper()}
+    director = pathlib.Path(order_path).resolve().parent.parent
+    if log_text is None and (director / "DIRECTOR_LOG.md").is_file():
+        log_path = (director / "DIRECTOR_LOG.md").as_posix()
+        log_text = read_or_none(director / "DIRECTOR_LOG.md")
+    if safety.on(config, "spec_review_for_standard"):
+        folder = (pathlib.Path(log_path).resolve().parent if log_path else director) / "reviews"
+        problems += spec_review_problems(order_text, ids, log_text, log_path, folder, notes)[0]
+    if safety.on(config, "plan_gate") and log_text is not None:
+        approved = [e[3].group(2) or "" for e in timed_events(log_text, PLAN_APPROVED) if id_prefixes([e[0]]) & ids]
+        problems += safety.plan_problems(order_text, sorted(ids), approved, repo)
+    return problems
+
+
+PROTECTED_FIELD = re.compile(r"^[ \t]*PROTECTED_CHANGED[ \t]*[:：][ \t]*(.*)$", re.M)
+PROTECTED_NONE = ("NONE", "無", "没有", "沒有", "-")
+
+
+def protected_report_problems(report_text, order_text, order_path, repo, config_path, candidate, notes):
+    """3.0.0 B4 (from agydw / dshdw ds.4 B5): the report's `PROTECTED_CHANGED:` line names each protected test file
+    the work changed (TESTS_LOCKED, director_work.json "protected_tests"), or NONE / 無, and --match holds it against
+    git: 無 while a protected file changed FAILs; a changed file the line leaves out FAILs; existing content changed in
+    a protected file FAILs (it may only grow). An order that protects nothing: not checked."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("scope_check", pathlib.Path(__file__).resolve().parent / "scope_check.py")
+    scope = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(scope)
+    config, config_problems = scope.safety.load_config(order_path, config_path)
+    try:
+        summary = scope.protected_summary(repo, order_text, order_path, config, candidate=candidate)
+    except (RuntimeError, OSError, ValueError) as error:
+        notes.append(f"PROTECTED_CHANGED: not compared with git ({error}); pass --repo (and --candidate)")
+        return []
+    if summary is None:
+        return []
+    changed, broken = summary
+    problems = [f"PROTECTED: {path}: {why}" for path, why in broken]
+    m = PROTECTED_FIELD.search(report_text)
+    if not m:
+        notes.append("PROTECTED_CHANGED: missing in the report; write each protected test file the work changed "
+                     "(scope_check.py prints the line), or NONE" + (f"; git shows: {', '.join(changed)}" if changed else ""))
+        return problems
+    value = re.split(r"\s+#", m.group(1))[0].strip()
+    listed = [] if value.strip("`").strip() in PROTECTED_NONE or value.upper().startswith("NONE") else \
+        [item.strip().strip("`").replace("\\", "/") for item in re.split(r"[,，、;；\s]+", value) if item.strip().strip("`")]
+    if not listed and changed:
+        problems.append(f"PROTECTED_CHANGED: the report says {value or 'nothing'}, but git shows protected test files "
+                        f"changed: {', '.join(changed)}")
+    else:
+        left_out = [path for path in changed if path not in listed]
+        if left_out:
+            problems.append(f"PROTECTED_CHANGED: changed protected test files the report leaves out: {', '.join(left_out)}")
+        extra = [path for path in listed if path not in changed]
+        if extra:
+            notes.append(f"PROTECTED_CHANGED: the report lists files git shows unchanged: {', '.join(extra)}")
+    return problems
+
+
 def sequence_problems(order_text, order_path, log_text, log_path, repo, notes):
     """2.2.5 (B3) for one Standard / Strict order: approval before the first commit, its own spec review, reviews from
     another session. Returns the problems; notes get NOT_CHECKED and WARN lines."""
@@ -1954,21 +1899,11 @@ def sequence_problems(order_text, order_path, log_text, log_path, repo, notes):
                                 "work began")
             else:
                 notes.append(f"gate order: {kind} {name} at {shown}, first commit {sha[:10]} at {at.isoformat()}")
-    # its own spec review (ported from dshdw's ds.4 B4 spec_review_problems)
-    reviews = mine(timed_events(log_text, SPEC_REVIEW_EVENT))
-    review_files = files_naming(pathlib.Path(log_path).resolve().parent / "reviews", ids, "SPEC_REVIEW")
-    reviewer = None
-    if reviews:
-        rest = reviews[-1][3].group(2) or ""
-        lacking = safety_module().review_fields_lacking(rest)
-        if lacking:
-            notes.append(f"SPEC_REVIEW {label}: the log line lacks {' '.join(lacking)}")
-        reviewer = session_in(reviews[-1][3].group(0))
-    elif review_files:
-        notes.append(f"SPEC_REVIEW {label}: no log line; review file {review_files[-1].name}")
-    else:
-        problems.append(f"SPEC_REVIEW: no `SPEC_REVIEW {label} tokens=... issues=... adopted=...` line in {log_path} "
-                        "and no reviews/*SPEC_REVIEW* file naming it; every Standard / Strict order needs its own")
+    # its own spec review (shared with the 3.0.0 D1 --match gate)
+    found, reviews, review_files = spec_review_problems(order_text, ids, log_text, log_path,
+                                                        pathlib.Path(log_path).resolve().parent / "reviews", notes)
+    problems += found
+    reviewer = session_in(reviews[-1][3].group(0)) if reviews else None
     if reviewer is None and review_files:
         reviewer = session_in(read_or_none(review_files[-1]))
     dispatches = mine(timed_events(log_text, DISPATCH_EVENT))
@@ -1995,13 +1930,28 @@ def sequence_problems(order_text, order_path, log_text, log_path, repo, notes):
 
 
 E2E_ENTRY = re.compile(r"^[ \t]*ENTRY_POINT[ \t]*[:=][ \t]*\S", re.M)
-E2E_EXIT = re.compile(
-    r"^[ \t]*EXIT_CODE[ \t]*[:=][ \t]*(-?\d+)\b|\bexit[ \t]*=[ \t]*(-?\d+)\b|\bCommand exited with code[ \t]+(-?\d+)\b",
-    re.I | re.M,
-)
-E2E_FAIL_MARKER = re.compile(r"^[ \t]*(?:FAILED\b|FAIL\b|ERROR:|Traceback \(most recent call last\):)", re.M)
+# 3.0.0 (D2, from dshdw 2.6.0-ds.7): how an end-to-end record says how its run ended
+E2E_EXIT = re.compile(r"^[ \t]*EXIT_CODE[ \t]*[:=][ \t]*(-?\d+)\b|\bexit[ \t]*=[ \t]*(-?\d+)\b"
+                      r"|\bCommand exited with code[ \t]+(-?\d+)\b", re.I | re.M)
+# 3.0.0 B2 (from agy.6 2df3483): a RESULT / STATUS / VERDICT line that says FAIL, FAILED, ERROR, BLOCKED or PARTIAL,
+# and a count of failed tests ("3 failed"), are failure markers too; before, `RESULT: FAIL` beside `EXIT_CODE: 0` passed
+E2E_FAIL_MARKER = re.compile(r"^[ \t]*(?:FAILED\b|FAIL\b|ERROR:|Traceback \(most recent call last\):"
+                             r"|(?i:(?:RESULT|STATUS|VERDICT)[ \t]*[:=][ \t]*(?:FAIL|FAILED|ERROR|BLOCKED|PARTIAL)\b))"
+                             r"|(?P<count>\b[1-9]\d*[ \t]+(?i:failed)\b)", re.M)
 E2E_PASS_MARKER = re.compile(r"^[ \t]*(?:RESULT|STATUS|VERDICT)[ \t]*[:=][ \t]*(?:PASS|OK|SUCCESS)\b", re.I | re.M)
-E2E_CANDIDATE_FIELD = re.compile(r"^[ \t]*(?:CANDIDATE_HEAD|CANDIDATE|COMMIT|HEAD)[ \t]*:[ \t]*([0-9a-fA-F]{7,40})\b", re.M)
+
+
+def e2e_outcome(text):
+    """3.0.0 (D2): (problems, completed) of one end-to-end record: every non-zero exit code and the first failure
+    marker are problems; completed when there is none and the record shows exit 0 or a PASS line."""
+    codes = [int(next(g for g in found.groups() if g is not None)) for found in E2E_EXIT.finditer(text)]
+    problems = [f"recorded non-zero exit code ({code})" for code in dict.fromkeys(c for c in codes if c != 0)]
+    marker = E2E_FAIL_MARKER.search(text)
+    if marker:
+        line = text.count("\n", 0, marker.start()) + 1
+        what = "has a count of failed tests" if marker.group("count") else "starts with a failure marker"
+        problems.append(f"line {line} {what} ({marker.group(0).strip()})")
+    return problems, not problems and (0 in codes or bool(E2E_PASS_MARKER.search(text)))
 
 
 FEAS_FIELD = re.compile(r"^[ \t]*(FEASIBILITY|FEASIBLE_COUNT|SCRIPT|RESULT)[ \t]*[:=][ \t]*(.*?)[ \t]*$", re.M)
@@ -2080,75 +2030,40 @@ def feasibility_problems(path, notes):
     return problems
 
 
-def _e2e_matches_candidate(txt, candidate):
-    """Return True if E2E record has a structured candidate field matching candidate SHA, None if unbound, False if bound elsewhere."""
-    cands = [m.group(1).lower() for m in E2E_CANDIDATE_FIELD.finditer(txt)]
-    if not cands:
-        return None
-    cand_low = candidate.lower()
-    return any(cand_low.startswith(c) or c.startswith(cand_low) for c in cands)
-
-
-def final_problems(folder, notes, allow_incomplete_e2e=False, candidate=None):
-    """2.2.5 (B5) / 2.6.0-ds.7 (A4): final acceptance of a DIRECTOR folder requiring completed (and optional candidate-bound) E2E outcome(s)."""
+def final_problems(folder, notes, skip=()):
+    """2.2.5 (B5): final acceptance of a DIRECTOR folder (or a folder holding DIRECTOR/). skip (3.0.0 B12): relative
+    names of E2E records left out (--skip-old-e2e: runs of another candidate)."""
     base = pathlib.Path(folder)
     if not (base / "evidence").is_dir() and (base / "DIRECTOR").is_dir():
         base = base / "DIRECTOR"
     problems = []
     e2e = base / "evidence" / "E2E"
     records = sorted(p for p in e2e.rglob("*") if p.is_file() and p.stat().st_size > 0) if e2e.is_dir() else []
-    if not records:
+    if skip:
+        records = [p for p in records if p.relative_to(e2e).as_posix() not in skip]
+        if not records:
+            problems.append(f"E2E: every record in {e2e} ran another candidate (--skip-old-e2e left out "
+                            f"{len(skip)}); run the spec's scenarios on the delivered commit and keep the output there")
+    if not records and not skip:
         problems.append(f"E2E: no end-to-end evidence in {e2e}; before the final verdict the lead runs the spec's "
                         "scenarios once through the product's public entry point and keeps the output there")
     else:
-        raw_texts = [(p, read_or_none(p) or "") for p in records]
-        texts = []
-        for p, txt in raw_texts:
-            if candidate:
-                bound = _e2e_matches_candidate(txt, candidate)
-                if bound is False:
-                    other_cands = [m.group(1) for m in E2E_CANDIDATE_FIELD.finditer(txt)]
-                    notes.append(f"INFO E2E: ignored historical record {p.name} bound to different commit ({other_cands[0][:10]})")
-                    continue
-            texts.append((p, txt))
-
-        if not texts:
-            problems.append(f"E2E: candidate commit {candidate[:12] if candidate else ''} has no matching end-to-end evidence in {e2e}")
-        else:
-            if not any(E2E_ENTRY.search(txt) for _, txt in texts):
-                notes.append(f"WARN E2E: no record in {e2e} names its `ENTRY_POINT:` (the one public entry point it ran)")
-            completed_texts = []
-            e2e_failed = False
-            for p, txt in texts:
-                file_failed = False
-                file_zero_exit = False
-                for xm in E2E_EXIT.finditer(txt):
-                    code_str = next((g for g in xm.groups() if g is not None), None)
-                    if code_str is None:
-                        continue
-                    code = int(code_str)
-                    if code != 0:
-                        problems.append(f"E2E: {p.name} recorded non-zero exit code ({code})")
-                        e2e_failed = True
-                        file_failed = True
-                    else:
-                        file_zero_exit = True
-                fm = E2E_FAIL_MARKER.search(txt)
-                if fm:
-                    problems.append(f"E2E: {p.name} contains failure marker ({fm.group(0).strip()})")
-                    e2e_failed = True
-                    file_failed = True
-                if not file_failed and (file_zero_exit or E2E_PASS_MARKER.search(txt)):
-                    completed_texts.append((p, txt))
-            if not e2e_failed and not completed_texts:
-                msg = f"E2E_INCOMPLETE: no record in {e2e} contains an explicit completed outcome (e.g. `EXIT_CODE: 0` or `RESULT: PASS`)"
-                if allow_incomplete_e2e:
-                    notes.append(f"WARN {msg}")
-                else:
-                    problems.append(msg)
-            if candidate and completed_texts:
-                if not any(_e2e_matches_candidate(txt, candidate) is True for _, txt in completed_texts):
-                    problems.append(f"E2E: candidate commit {candidate[:12]} lacks a completed record with COMMIT:/CANDIDATE_HEAD: in {e2e}")
+        texts = [(p, read_or_none(p)) for p in records]
+        if not any(E2E_ENTRY.search(text or "") for _, text in texts):
+            notes.append(f"WARN E2E: no record in {e2e} names its `ENTRY_POINT:` (the one public entry point it ran)")
+        completed = 0
+        for path, text in texts:  # 3.0.0 (D2): the run ended, and ended well
+            name = path.relative_to(e2e).as_posix()
+            if text is None:
+                problems.append(f"E2E: {name} is not UTF-8 text (or cannot be read): its outcome cannot be checked; "
+                                "keep only text logs in evidence/E2E/")
+                continue
+            found, done = e2e_outcome(text)
+            problems += [f"E2E: {name} {problem}" for problem in found]
+            completed += done
+        if not completed:
+            problems.append(f"E2E_INCOMPLETE: no record in {e2e} shows an explicit completed outcome (a line "
+                            "`EXIT_CODE: 0` or `RESULT: PASS`); a run that did not finish is not done")
     register = base / "DECISION_REGISTER.md"
     text = read_or_none(register) if register.is_file() else None
     if text is None:
@@ -2175,6 +2090,34 @@ def final_problems(folder, notes, allow_incomplete_e2e=False, candidate=None):
         notes.append(f"WARN DD_CASE: {', '.join(empty[:12])}" + (f" (+{len(empty) - 12} more)" if len(empty) > 12 else "")
                      + " have no 驗收案例 (an end-to-end case with exact expected numbers)")
     return problems
+
+
+
+def delivery_problems(folder, repo, notes, skip_old_e2e=False):
+    """3.0.0 (C2 hard line, C4): tools/delivery.py check of the folder's evidence/DELIVERY.json: the delivered commit is
+    the verified candidate, the delivered files are unchanged, every condition is judged in every environment."""
+    import importlib.util
+    base = pathlib.Path(folder)
+    if not (base / "evidence").is_dir() and (base / "DIRECTOR").is_dir():
+        base = base / "DIRECTOR"
+    spec = importlib.util.spec_from_file_location("dw_delivery", pathlib.Path(__file__).with_name("delivery.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    problems, more = module.check_delivery(base, repo, skip_old_e2e=skip_old_e2e)
+    notes += more
+    return problems
+
+
+def old_e2e_records(folder):
+    """3.0.0 B12: delivery.py's list of E2E records that ran another candidate (for --skip-old-e2e)."""
+    import importlib.util
+    base = pathlib.Path(folder)
+    if not (base / "evidence").is_dir() and (base / "DIRECTOR").is_dir():
+        base = base / "DIRECTOR"
+    spec = importlib.util.spec_from_file_location("dw_delivery", pathlib.Path(__file__).with_name("delivery.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.old_e2e_records(base)
 
 
 # 2.3.0: a PASS-type verdict names at least one check its writer ran: the command and its result, as ran_line.py writes
@@ -2344,37 +2287,176 @@ def dated(kind, text):
     return m.group(m.lastindex or 0) if m else None
 
 
+BASE_DEFAULTS = {"check": True, "fetch": True, "strict": False}
+BASE_SHA = re.compile(r"(?:(?P<ref>[\w./-]+)\s*@\s*)?\b(?P<sha>[0-9a-fA-F]{7,40})\b")
+BRACKETED = re.compile(r"[（(][^（()）]*[)）]")
+
+
+def base_config(order_path, config_path, notes):
+    """2.2.2: the "base_ref" switches: --config, else director_work.json in the order's folder or the one above it
+    (DIRECTOR/orders/WO.md -> DIRECTOR/director_work.json). A switch that is not true / false is a note, default kept."""
+    config = dict(BASE_DEFAULTS)
+    folder = pathlib.Path(order_path).resolve().parent
+    found = [pathlib.Path(config_path)] if config_path else [f / "director_work.json" for f in (folder, folder.parent)]
+    path = next((f for f in found if f.is_file()), None)
+    if path is None:
+        return config
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError) as error:
+        notes.append(f"{path.name}: cannot read ({error}); base_ref defaults used")
+        return config
+    block = data.get("base_ref") if isinstance(data, dict) else None
+    if block is None:
+        return config
+    if not isinstance(block, dict):
+        notes.append(f"{path.name} base_ref: an object with check / fetch / strict, got {block!r}; defaults used")
+        return config
+    for key, value in block.items():
+        if key.startswith("_"):
+            continue
+        if key not in BASE_DEFAULTS:
+            notes.append(f"{path.name} base_ref.{key}: not a key this check reads (check, fetch, strict)")
+        elif not isinstance(value, bool):
+            notes.append(f"{path.name} base_ref.{key}: true or false, got {value!r}; {str(BASE_DEFAULTS[key]).lower()} used")
+        else:
+            config[key] = value
+    return config
+
+
+LONG_PATH_QUOTED = re.compile(r"""['"]([^'"\n]+)['"]""")
+LONG_PATH_BARE = re.compile(r"(\S+): Filename too long")
+WINDOWS_PATH_MAX = 259  # MAX_PATH 260 with the closing NUL
+
+
+def long_path(message, root):
+    """2.2.5 (B11): one clear line for git's `Filename too long`: which path, how long, how much over, what to do.
+    None when the message is about something else."""
+    line = next((row for row in (message or "").splitlines() if "Filename too long" in row), None)
+    if line is None:
+        return None
+    quoted = LONG_PATH_QUOTED.findall(line)
+    bare = LONG_PATH_BARE.search(line)
+    name = (next((q for q in quoted if "/" in q or "\\" in q), quoted[0]) if quoted else bare.group(1) if bare else "")
+    name = name.strip()
+    base = str(root).rstrip("/\\")
+    full = name if not name or os.path.isabs(name) else base + "/" + name
+    size = len(full)
+    over = (f"{size} characters, {size - WINDOWS_PATH_MAX} over the {WINDOWS_PATH_MAX} Windows allows"
+            if size > WINDOWS_PATH_MAX else f"{size} characters")
+    return (f"path too long for git on Windows: {full or root} ({over}); use a shorter origin / worktree folder "
+            "(for example <WS>/<name> on a short path) or `git config core.longpaths true` in that repository")
+
+
+def base_git(repo, *args, timeout=120):
+    import subprocess
+    try:
+        proc = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return 1, str(error)
+    out = (proc.stdout if proc.returncode == 0 else (proc.stderr or proc.stdout)).strip()
+    return proc.returncode, (long_path(out, repo) or out) if proc.returncode else out
+
+
+def base_ref_problems(order_text, repo, config, notes, fetched):
+    """2.2.2 (ported from the DeepSeek port's ds.3): is the order's BASE_REF commit still the tip of its remote branch?
+    A commit that is missing or behind is a `WARN BASE_REF` note, a problem with --strict-base ("strict"). A fetch
+    that fails, or a folder that is not a git checkout, says it did not compare: never a silent pass.
+    fetched caches one fetch per repository and remote for the whole run."""
+    if not config["check"]:
+        return []
+    m = re.search(r"^[ \t]*BASE_REF[ \t]*=[ \t]*(.*)$", order_text, re.M)
+    value = re.split(r"\s+#", m.group(1))[0].strip() if m else ""  # a trailing ` # comment` is not the ref
+    value = BRACKETED.sub(" ", value).strip()  # 2.2.5 (B10): `origin/main @ abc1234（v2.2.4）`: brackets are a comment
+    found = BASE_SHA.search(value)
+    if not found:  # no commit named (e.g. `main @ <placeholder>`): nothing to compare, and no note (older orders unchanged)
+        return []
+    problems = []
+
+    def warn(message):
+        (problems if config["strict"] else notes).append(("" if config["strict"] else "WARN ") + "BASE_REF: " + message)
+        return problems
+
+    sha, ref = found.group("sha").lower(), found.group("ref") or ""
+    code, top = base_git(repo, "rev-parse", "--show-toplevel")
+    if code:
+        return warn(f"not compared with the remote: {repo} is not a git checkout (give --repo <project checkout>)")
+    code, remotes = base_git(repo, "remote")
+    remotes = remotes.split() if not code else []
+    remote, branch = None, None
+    if "/" in ref and ref.split("/", 1)[0] in remotes:
+        remote, branch = ref.split("/", 1)
+    elif remotes:
+        remote = "origin" if "origin" in remotes else remotes[0]
+        branch = ref if ref and "/" not in ref else None
+    if not remote:
+        return warn("not compared with the remote: the repository has no remote")
+    if config["fetch"]:
+        key = (top, remote)
+        if key not in fetched:
+            fetched[key] = base_git(repo, "fetch", "--quiet", remote)
+        code, message = fetched[key]
+        if code:
+            return warn(f"not compared with the remote: git fetch {remote} failed "
+                        f"({message.splitlines()[-1][:200] if message else code})")
+    else:
+        notes.append(f"BASE_REF: compared with the local copy of {remote} (\"base_ref\": {{\"fetch\": false}}); not fetched")
+    if not branch:
+        code, head = base_git(repo, "symbolic-ref", "--short", f"refs/remotes/{remote}/HEAD")
+        branch = head.split("/", 1)[1] if not code and "/" in head else "main"
+    tip_ref = f"{remote}/{branch}"
+    code, tip = base_git(repo, "rev-parse", "--verify", "-q", tip_ref + "^{commit}")
+    if code:
+        return warn(f"not compared with the remote: {tip_ref} does not exist")
+    code, full = base_git(repo, "rev-parse", "--verify", "-q", sha + "^{commit}")
+    if code:
+        return warn(f"commit {sha} does not exist in {top}" + (" (even after fetching)" if config["fetch"] else ""))
+    if full == tip:
+        notes.append(f"BASE_REF {sha} = {tip_ref} ({'fetched now' if config['fetch'] else 'local copy'})")
+        return []
+    code, behind = base_git(repo, "rev-list", "--count", f"{full}..{tip}")
+    code2, ahead = base_git(repo, "rev-list", "--count", f"{tip}..{full}")
+    behind, ahead = int(behind or 0) if not code else 0, int(ahead or 0) if not code2 else 0
+    if behind:
+        return warn(f"{sha} is {behind} commit(s) behind {tip_ref} ({tip[:10]})" + (f" and {ahead} ahead" if ahead else "")
+                    + f"; start the work from {tip_ref} (git fetch, then a branch from it) or write in the order why not")
+    notes.append(f"BASE_REF {sha} is {ahead} commit(s) ahead of {tip_ref} (not pushed yet); not stale")
+    return []
+
+
 def order_value(text, key):
-    """The value of an order's `KEY = value` header line, or None."""
+    """The value of an order's `KEY = value` header line, or None (3.0.0 B8)."""
     m = re.search(rf"^[ \t]*{re.escape(key)}[ \t]*=[ \t]*(.+?)[ \t]*$", text, re.M)
     return m.group(1) if m else None
 
 
 def shell_quote(part):
     """A command part as a worker types it in pwsh or bash: quoted when it holds anything but plain path characters."""
+    part = str(part)
     return part if re.fullmatch(r"[\w./:=@+,-]+", part) else '"' + part.replace('"', '\\"') + '"'
 
 
-def worktree_line(root):
-    """2.2.5-ds.5 (WO-DS-009 B4): the report's WORKTREE line from dsh_session.worktree_kind (git worktree list), so
-    「隔離 worktree」 / 「共用 checkout」 is never typed by hand."""
+def skeleton_worktree_line(root):
+    """The report's WORKTREE line from tools/worktree.py (git folders), so it is never typed by hand (3.0.0 B8)."""
     import importlib.util
-    path = pathlib.Path(__file__).resolve().parent / "dsh_session.py"
     try:
-        spec = importlib.util.spec_from_file_location("dsh_session_for_gate", path)
+        spec = importlib.util.spec_from_file_location("dw_worktree_for_gate", pathlib.Path(__file__).with_name("worktree.py"))
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        return module.worktree_kind(root)[1] + " （工具產生，不要改寫）"
+        line = module.worktree_line(root)
     except (OSError, ImportError, AttributeError) as error:
-        return f"WORKTREE: <跑 dsh_session.py --worktree-status <checkout> 貼上；{error}>"
+        line, root = None, f"{root}; {error}"
+    return line or f"WORKTREE: <跑 worktree.py status <checkout> 貼上：{root}>"
 
 
 def report_skeleton(order_path, repo=None, evidence_dir=None):
-    """(skeleton, commands) for `--report-skeleton` (2.2.2-ds.3): a TASK REPORT with everything the order already
-    fixes filled in (TASK_ID, MODEL, BASE, ORDER line, ORDER_SHA256, one ACCEPTANCE row per AC with its allowed
-    statuses) and `<...>` where the worker writes; and the commands that finish the job (evidence per AC from the
-    order's CHECKS, scope_check, --match). In the WO-101 DSH run the worker spent about 12 steps reading this tool's
-    source to learn the format; the skeleton replaces that. A skeleton left unfilled fails --report (placeholders)."""
+    """(skeleton, commands) for `--report-skeleton` (3.0.0 B8, from dshdw 2.2.2-ds.3): a TASK REPORT with everything the
+    order already fixes filled in (TASK_ID, worker, MODEL (EFFORT), BASE, ORDER line, ORDER_SHA256, the WORKTREE line,
+    one TESTS line and one ACCEPTANCE row per AC with the statuses its type allows) and `<...>` where the worker writes;
+    and the commands that finish the job (evidence_record.py run per CHECKS line, scope_check.py --candidate,
+    gate_check.py --match). A worker no longer reads this tool's source to learn the format. Left unfilled, it fails
+    --report (placeholder left). Nothing is written but the --out file."""
     path = pathlib.Path(order_path)
     data = path.read_bytes()
     text = data.decode("utf-8-sig", errors="replace")
@@ -2385,31 +2467,30 @@ def report_skeleton(order_path, repo=None, evidence_dir=None):
     checks = order_checks(text) or {}
     worker = order_value(text, "PRIMARY_WORKER") or ""
     named = re.search(r"「([^」]+)」", worker)
-    worker = named.group(1) if named else "<worker 名稱>"
+    worker = named.group(1) if named and not PLACEHOLDER.search(named.group(1)) else "<worker 名稱>"
     model = order_value(text, "MODEL / EFFORT") or ""
     model_parts = [part.strip() for part in re.split(r"[（(]", model)[0].split("/")]
     model = (f"{model_parts[0]} (EFFORT {model_parts[1]})" if len(model_parts) > 1 and model_parts[0] and model_parts[1]
-             else "<MODEL (EFFORT ...)>")
+             and not PLACEHOLDER.search(model) else "<MODEL (EFFORT ...)>")
     base = BASE_SHA.search(re.split(r"\s+#", order_value(text, "BASE_REF") or "")[0])
     base = base.group("sha") if base else "<BASE commit>"
     branch, head, clean = "<分支>", "<HEAD 40 位>", "<yes|no>"
-    root = pathlib.Path(repo or ".")
-    code, out = base_git(root, "rev-parse", "--abbrev-ref", "HEAD")
-    if code == 0:
+    checkout = pathlib.Path(repo or ".")
+    code, out = base_git(checkout, "rev-parse", "--abbrev-ref", "HEAD")
+    if code == 0 and out and out != "HEAD":
         branch = out
     strict = (order_value(text, "GOVERNANCE") or "").split()[:1] == ["Strict"]
+    revision = order_revision(text)
     lines = [
         "# TASK REPORT",
         "",
         "```text",
         f"<一句話結論：{wo} 完成／未完成什麼>",
-        "",
         f"TASK_ID / WORKER / MODEL / BRANCH / BASE / HEAD / WORKTREE_CLEAN: {wo} / {worker} / {model} / {branch} / "
         f"{base} / {head} / {clean}",
-        f"ORDER: {path.name} REVISION {order_revision(text)}",
+        skeleton_worktree_line(checkout),
+        f"ORDER: {path.name} REVISION {revision if revision is not None else '<n>'}",
         f"ORDER_SHA256: {digest}",
-        worktree_line(root),
-        "SESSION_ID: <DSH session id，沒有就刪這行>",
         "RESULT: <PASS | PARTIAL | BLOCKED | FAIL>",
         "  ENGINEERING: <改了什麼、commit、檔數>",
         "  PRODUCT（成品）: <行為對上規格／驗收的哪幾條>",
@@ -2425,7 +2506,6 @@ def report_skeleton(order_path, repo=None, evidence_dir=None):
     lines += [
         "SCOPE_CHECK: <貼 scope_check.py 的最後一行>",
         "EVIDENCE: <evidence_record 的 .json 路徑，逗號分隔；沒有寫 NONE: 原因>",
-        f"AGENT_NAME: {worker}",
         "RAN:",
         "- `<實際跑過的指令，一行一個>` exit=<N> at=<HH:MM>",
         "ACCEPTANCE:",
@@ -2451,25 +2531,25 @@ def report_skeleton(order_path, repo=None, evidence_dir=None):
     evidence = pathlib.Path(evidence_dir).resolve() if evidence_dir else director / "evidence"
     tools = pathlib.Path(__file__).resolve().parent
     py = "python -I -X utf8"
-    cwd = root.resolve().as_posix()
-    order = path.resolve().as_posix()
+    cwd = shell_quote(checkout.resolve().as_posix())
+    order = shell_quote(path.resolve().as_posix())
+    out_dir = shell_quote(evidence.as_posix())
     commands = [f"# {wo}: run these after the last commit (tick every task before that commit, so the evidence "
                 "is recorded at the HEAD the report names)"]
     work_dir = re.split(r"\s+#", order_value(text, "WORK_DIR") or "")[0].strip()
     if work_dir and not PLACEHOLDER.search(work_dir) and work_dir.upper() != "NONE":
-        # 2.2.4-ds.4 (B10): temp files stay in WORK_DIR/tmp (dsh_session.py --temp-env prints the same lines)
-        tmp = (pathlib.Path(work_dir) / "tmp").as_posix()
+        tmp = (pathlib.Path(work_dir) / "tmp").as_posix()  # docs/02: temp files stay in WORK_DIR/tmp (worktree.py temp)
         commands.append(f"# TEMP first: PowerShell $env:TEMP='{tmp}'; $env:TMP='{tmp}'; $env:TMPDIR='{tmp}'  |  "
                         f"bash export TEMP='{tmp}' TMP='{tmp}' TMPDIR='{tmp}'")
     for ac in acs:
         if ac in checks:
-            commands.append(f"{py} {(tools / 'evidence_record.py').as_posix()} run --out-dir {evidence.as_posix()} "
+            commands.append(f"{py} {shell_quote((tools / 'evidence_record.py').as_posix())} run --out-dir {out_dir} "
                             f"--order {order} --cwd {cwd} --label {ac} -- " + " ".join(map(shell_quote, checks[ac])))
-    commands.append(f"{py} {(tools / 'scope_check.py').as_posix()} --order {order} --repo {cwd} "
+    commands.append(f"{py} {shell_quote((tools / 'scope_check.py').as_posix())} --order {order} --repo {cwd} "
                     "--candidate <git rev-parse HEAD>")
-    report = director / "reports" / f"{wo}_TASK_REPORT.md"
-    commands.append(f"{py} {(tools / 'gate_check.py').as_posix()} --match {report.as_posix()} {order} "
-                    f"--evidence-dir {evidence.as_posix()} --repo {cwd}"
+    report = shell_quote((director / "reports" / f"{wo}_TASK_REPORT.md").as_posix())
+    commands.append(f"{py} {shell_quote((tools / 'gate_check.py').as_posix())} --match {report} {order} "
+                    f"--evidence-dir {out_dir} --repo {cwd}"
                     + (" --candidate <git rev-parse HEAD> --dispatch-log <DIRECTOR_LOG.md>" if strict else ""))
     return "\n".join(lines), commands
 
@@ -2482,50 +2562,51 @@ def main():
     ap.add_argument("--match", nargs=2, action="append", default=[], metavar=("REPORT", "ORDER"))
     ap.add_argument("--evidence-dir", metavar="DIR", help="with --match: AUTO PASS rows need a passing evidence record here")
     ap.add_argument("--dispatch-log", metavar="LOG", help="with --match: the order's hash must equal its DISPATCH line here")
-    ap.add_argument("--candidate", metavar="SHA", help="with --match / --verdict / --po-acceptance / --final: the commit under review, 40 hex digits (git rev-parse <branch>)")
+    ap.add_argument("--candidate", metavar="SHA", help="with --match: the commit under review, 40 hex digits (git rev-parse <branch>)")
     ap.add_argument("--hash", nargs="+", default=[], metavar="FILE", help="print the hash ORDER_SHA256 compares and the DISPATCH line")
     ap.add_argument("--preflight", nargs=2, action="append", default=[], metavar=("REPORT", "ORDER"),
                     help="list what an older review lacks for a Strict review now (LACKS lines)")
     ap.add_argument("--repo", metavar="DIR", help="with --preflight: a trusted checkout to resolve a short HEAD in; "
-                    "with --order / --match: the project checkout (BASE_REF, locked and protected tests; default: .)")
-    ap.add_argument("--config", metavar="FILE", help="director_work.json with the \"safety\", \"base_ref\", "
-                    "\"order_limits\" and \"protected_tests\" blocks (default: next to the order's folder; all gates on when there is none); with --resume: "
-                    "resume.max_bytes / resume.max_line_bytes (default: director_work.json beside the RESUME_STATE, "
-                    "else 20480 / 4096); with --verdict (2.3.0): verdict_self_check (warn | fail; default: "
-                    "director_work.json in the verdict's folder or the one above, else warn)")
-    ap.add_argument("--strict", action="store_true", help="2.2.2-ds.3: with --resume, RESUME_SIZE fails instead of a "
-                    "shadow note; with --after-verdict, the default since 2.2.5 (kept for old commands)")
+                    "2.2.2 with --order: the project checkout the BASE_REF is fetched and compared in (default: the "
+                    "order's folder)")
     ap.add_argument("--brief", metavar="BRIEF", help="the brief's fingerprints; with --order / --match / --preflight: "
                     "BRIEF_STALE notes (shadow)")
     ap.add_argument("--snapshot", metavar="DIR", help="with --brief or --hash: keep a snapshot in DIR (atomic write)")
     ap.add_argument("--order-history", metavar="DIR", help="with --match: old orders, found by hash, for carried-over evidence")
     ap.add_argument("--artifact-root", metavar="DIR", help="with --po-acceptance: the folder the entry and manifest paths "
                     "are read from (default: the record file's folder)")
-    ap.add_argument("--strict-base", action="store_true", help="with --order: a BASE_REF commit that is missing or behind "
-                    "the remote branch, or a fetch that fails, fails (default: a WARN note)")
-    ap.add_argument("--report-skeleton", metavar="ORDER", help="print a TASK REPORT skeleton for ORDER (order fields, "
-                    "hash and one ACCEPTANCE row per AC filled in) and the commands that finish the job (2.2.2-ds.3)")
-    ap.add_argument("--out", metavar="FILE", help="with --report-skeleton: write the skeleton to FILE (refused when FILE "
-                    "exists) and print only the commands")
     ap.add_argument("--after-verdict", nargs="+", default=[], metavar="VERDICT", help="2.2.4, 2.2.5: with --repo, FAIL "
                     "for commits after the last verdict's candidate that change files that are not documents, and for "
                     "a candidate no longer in HEAD's history (--warn: WARN, exit 0)")
     ap.add_argument("--orders", metavar="DIR", help="2.2.4: with --after-verdict, the folder the verdict's ORDER file is in")
     ap.add_argument("--sequence", nargs="+", default=[], metavar="ORDER", help="2.2.5: with --dispatch-log and --repo, "
                     "approval before the first commit, a spec review per order, reviews from another session")
-    ap.add_argument("--final", metavar="DIRECTOR", help="2.2.5: final acceptance of a DIRECTOR folder: evidence/E2E/ and the "
-                    "DD 驗收案例 column; 2.2.5-ds.5: usage.json from dsh_usage.py --out (WARN without it)")
-    ap.add_argument("--allow-incomplete-e2e", action="store_true", help="with --final: downgrade E2E_INCOMPLETE to WARN "
-                    "when PO explicitly accepts an incomplete E2E record; non-zero exit codes and failure markers still fail")
-    ap.add_argument("--usage", metavar="FILE", help="2.2.5-ds.5: with --final, the dsh_usage.py --out file "
-                    "(default DIRECTOR/usage.json)")
+    ap.add_argument("--final", metavar="DIR", help="2.2.5: final acceptance of a DIRECTOR folder: evidence/E2E/ and the "
+                    "DD 驗收案例 column")
+    ap.add_argument("--skip-old-e2e", action="store_true", help="3.0.0 B12: with --final, leave out E2E records whose "
+                    "CANDIDATE: is another commit than DELIVERY.json's (default: they count and block)")
     ap.add_argument("--feasibility", nargs="+", default=[], metavar="RECORD", help="2.3.0: the feasibility record a fix "
                     "set or a frozen gate needs (FEASIBLE_COUNT, SCRIPT, RESULT; each threshold with a real-world source "
                     "or marked reference)")
+    ap.add_argument("--strict", action="store_true", help="2.2.2: with --resume, RESUME_SIZE fails instead of a shadow note; "
+                    "with --after-verdict, the default since 2.2.5 (kept for old commands)")
+    ap.add_argument("--config", metavar="director_work.json", help="2.2.2: with --resume, read resume.max_bytes / "
+                    "resume.max_line_bytes (default: director_work.json beside the RESUME_STATE, else 20480 / 4096); "
+                    "with --order, read base_ref.check / fetch / strict; with --verdict (2.3.0), read verdict_self_check "
+                    "(warn | fail; default: director_work.json in the verdict's folder or the one above, else warn)")
+    ap.add_argument("--strict-base", action="store_true", help="2.2.2: with --order, a BASE_REF commit that is missing "
+                    "or behind its remote branch, or a fetch that fails, fails (default: a WARN note)")
+    ap.add_argument("--report-skeleton", metavar="ORDER", help="3.0.0 B8: print a TASK REPORT skeleton for ORDER "
+                    "(order fields, hash, WORKTREE line and one ACCEPTANCE row per AC filled in) and the commands that "
+                    "finish the job; with --repo (the worker's checkout) and --evidence-dir")
+    ap.add_argument("--out", metavar="FILE", help="with --report-skeleton: write the skeleton to FILE (refused when FILE "
+                    "exists) and print only the commands")
     ap.add_argument("--warn", action="store_true", help="report problems as WARN and exit 0")
     ap.add_argument("--since", metavar="YYYY-MM-DD", help="skip files dated before this day")
     a = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
+    if a.skip_old_e2e and not a.final:  # 3.0.0 B12
+        ap.error("--skip-old-e2e works with --final")
     jobs = [(kind, path) for kind in CHECKS for path in getattr(a, kind.replace("-", "_"))] + [("match", pair) for pair in a.match]
     if a.snapshot and not (a.brief or a.hash):
         ap.error("--snapshot works with --brief or --hash")
@@ -2535,14 +2616,21 @@ def main():
         brief_text = pathlib.Path(a.brief).read_text(encoding="utf-8-sig")
         if not brief_is_locked(brief_text) or brief_revision(brief_text) is None:
             ap.error("--brief with --snapshot: the brief must say 狀態：LOCKED and 版次：<number>; a draft is not snapshotted")
+        unmet = load_spec_gate().content_problems(brief_text)  # 3.0.0 (R6): only a complete, confirmed spec is locked
+        if unmet:
+            ap.error("--brief with --snapshot: the spec gate does not pass: " + "; ".join(code for code, _ in unmet)
+                     + " (tools/spec_gate.py check)")
+        stale = load_spec_gate().reapprove_problem(pathlib.Path(a.brief).read_bytes(), a.snapshot)  # review P1-1
+        if stale:
+            ap.error("--brief with --snapshot: " + stale)
     if a.order_history and not a.match:
         ap.error("--order-history works with --match")
     if a.order_history and not pathlib.Path(a.order_history).is_dir():
         ap.error(f"--order-history: folder not found: {a.order_history}")
     if a.out and not a.report_skeleton:
         ap.error("--out works with --report-skeleton")
-    if a.report_skeleton:
-        if jobs or a.hash or a.brief or a.preflight:
+    if a.report_skeleton:  # 3.0.0 B8
+        if jobs or a.hash or a.brief or a.preflight or a.after_verdict or a.sequence or a.final or a.feasibility:
             ap.error("--report-skeleton runs alone (with --repo, --evidence-dir and --out)")
         if not pathlib.Path(a.report_skeleton).is_file():
             ap.error(f"--report-skeleton: file not found: {a.report_skeleton}")
@@ -2570,7 +2658,11 @@ def main():
         data = pathlib.Path(path).read_bytes()
         text, digest = data.decode("utf-8-sig", errors="replace"), order_hash(data)
         ids, identity = order_identity(text, path)
-        print(f"{digest}  {path}\n  DISPATCH {order_key(ids) or pathlib.Path(path).stem} rev={order_revision(text)} sha={digest}")
+        print(f"{digest}  {path}")
+        if is_order(text, path) and spec_gate_failed(path, a.brief):  # 3.0.0 (R6): no DISPATCH line before the spec passes
+            missing.append(path)
+        else:
+            print(f"  DISPATCH {order_key(ids) or pathlib.Path(path).stem} rev={order_revision(text)} sha={digest}")
         if identity:
             print(f"  - {identity}")
         if a.snapshot:
@@ -2610,23 +2702,18 @@ def main():
                   + (f" (GOVERNANCE {mode.group(1)})" if mode else ""))
             for line in [f"  - {p}" for p in problems] + [f"  ~ {n}" for n in notes]:
                 print(line)
-    if a.allow_incomplete_e2e and not a.final:
-        ap.error("--allow-incomplete-e2e works with --final")
-    if a.candidate and not (a.match or a.verdict or a.po_acceptance or a.final):
-        ap.error("--candidate works with --match, --verdict, --po-acceptance or --final")
-    if a.candidate and not re.fullmatch(r"[0-9a-fA-F]{40}", a.candidate):
-        ap.error(f"--candidate takes the full commit, 40 hex digits (git rev-parse <branch>), got: {a.candidate}")
-    candidate = a.candidate.lower() if a.candidate else None
-    if a.usage and not a.final:
-        ap.error("--usage works with --final")
-    if a.final:  # 2.2.5 (B5); 2.2.5-ds.5 (WO-DS-009 B2): plus the usage.json lines, never a failure
+    if a.final:  # 2.2.5 (B5)
         if not pathlib.Path(a.final).is_dir():
             ap.error(f"--final: folder not found: {a.final}")
         notes = []
-        problems = final_problems(a.final, notes, allow_incomplete_e2e=a.allow_incomplete_e2e, candidate=candidate)
-        late_failed += bool(problems) and not a.warn
-        print(f"{('WARN' if a.warn else 'FAIL') if problems else 'OK  '} final {a.final}")
-        for line in [f"  - {p}" for p in problems] + [f"  ~ {n}" for n in notes] + usage_lines(a.final, a.usage):
+        skip = old_e2e_records(a.final) if a.skip_old_e2e else set()  # 3.0.0 B12
+        problems = final_problems(a.final, notes, skip) \
+            + delivery_problems(a.final, a.repo, notes, a.skip_old_e2e)  # 3.0.0 (C2, C4)
+        late_failed += bool(problems)  # 3.0.0 (D2): a hard line, --warn does not soften it
+        print(f"{'FAIL' if problems else 'OK  '} final {a.final}")
+        if problems and a.warn:
+            notes.append("--warn does not soften --final (3.0.0 hard line: no finished end-to-end run, no final PASS)")
+        for line in [f"  - {p}" for p in problems] + [f"  ~ {n}" for n in notes]:
             print(line)
     for path in a.feasibility:  # 2.3.0 (N2)
         notes = []
@@ -2640,12 +2727,16 @@ def main():
     if not jobs and not a.preflight:
         ap.error("give at least one of --resume / --order / --report / --verdict / --test-request / --po-acceptance / "
                  "--match / --preflight / --hash / --brief / --after-verdict / --sequence / --final / --feasibility")
-    if a.strict_base and not a.order:
-        ap.error("--strict-base works with --order")
-    if a.strict and not (a.resume or a.after_verdict):
-        ap.error("--strict works with --resume or --after-verdict")
     if a.repo and not (a.preflight or a.order or a.match or a.after_verdict or a.sequence):
         ap.error("--repo works with --preflight, --order, --match, --after-verdict or --sequence")
+    if a.strict and not (a.resume or a.after_verdict):
+        ap.error("--strict works with --resume or --after-verdict")
+    if a.config and not (a.resume or a.order or a.match or a.verdict):
+        ap.error("--config works with --resume, --order, --match or --verdict")
+    if a.strict_base and not a.order:
+        ap.error("--strict-base works with --order")
+    if a.repo and not pathlib.Path(a.repo).is_dir():
+        ap.error(f"--repo: folder not found: {a.repo}")
     if a.config and not pathlib.Path(a.config).is_file():
         ap.error(f"--config: file not found: {a.config}")
     if a.since and not DATE.fullmatch(a.since):
@@ -2658,6 +2749,11 @@ def main():
         ap.error("--dispatch-log works with --match, --preflight, --brief or --sequence")
     if a.dispatch_log and not pathlib.Path(a.dispatch_log).is_file():
         ap.error(f"--dispatch-log: file not found: {a.dispatch_log}")
+    if a.candidate and not (a.match or a.verdict or a.po_acceptance):
+        ap.error("--candidate works with --match, --verdict or --po-acceptance")
+    if a.candidate and not re.fullmatch(r"[0-9a-fA-F]{40}", a.candidate):
+        ap.error(f"--candidate takes the full commit, 40 hex digits (git rev-parse <branch>), got: {a.candidate}")
+    candidate = a.candidate.lower() if a.candidate else None
     log_text = pathlib.Path(a.dispatch_log).read_text(encoding="utf-8-sig") if a.dispatch_log else None
     dispatch = dispatch_records(log_text) if log_text is not None else None
     equivalent = equivalent_records(log_text) if log_text is not None else []
@@ -2673,7 +2769,7 @@ def main():
             print(f"  ~ {line}")
 
     failed = skipped = undated = 0
-    fetched = {}  # 2.2.2-ds.3: one git fetch per repository and remote for the BASE_REF check
+    fetched = {}  # 2.2.2: one git fetch per repository and remote for the BASE_REF check
     for report_path, order_path in a.preflight:
         files = [pathlib.Path(report_path), pathlib.Path(order_path)]
         if not all(f.is_file() for f in files):
@@ -2721,34 +2817,24 @@ def main():
                         else CHECKS[kind](text, notes))
             if kind == "verdict" and (a.match or candidate):
                 problems += verdict_binding(text, matched, candidate, notes, pairs)
-            if kind == "resume":  # 2.2.2-ds.3 (upstream 2.2.2): size, shadow unless --strict
+            if kind == "resume":  # 2.2.2: size, shadow unless --strict
                 size = resume_size(files[0].read_bytes(), *resume_limits_for(files[0], a.config, notes))
                 if size and a.strict:
                     problems.append(size)
                 elif size:
                     notes.append(f"shadow: {size}")
-        if text is not None and kind in ("order", "match"):
-            safety = safety_module()
-            order_path = files[-1]
-            order_text = text if kind == "order" else order_path.read_text(encoding="utf-8-sig")
-            config, problem = safety.load_config(order_path, a.config)
-            if problem:
-                problems.append(problem)
-            notes += safety.legacy_notes(config)
-            repo = pathlib.Path(a.repo or ".")
-            problems += safety.order_problems(order_text, order_path, repo, config, notes,
-                                              candidate=candidate if kind == "match" else None)
-            if kind == "order":
-                revision_sync_notes(order_text, order_path, notes)
-                base = base_config(order_path, a.config, notes)
+            if kind == "order":  # 2.2.2: BASE_REF freshness, WARN unless --strict-base
+                base = base_config(files[0], a.config, notes)
                 base["strict"] = base["strict"] or a.strict_base
-                problems += base_ref_problems(order_text, repo, base, notes, fetched)
-            if kind == "match":
-                problems += safety.match_problems(order_text, order_ids(order_text, order_path), log_text, repo, config,
-                                                  notes, order_path)
-                problems += protected_report_problems(text, order_text, order_path, repo, config, candidate, notes)
-                if log_text is not None:
-                    effort_notes(order_text, order_ids(order_text, order_path), log_text, notes)
+                problems += base_ref_problems(text, pathlib.Path(a.repo) if a.repo else files[0].resolve().parent, base,
+                                              notes, fetched)
+        if text is not None and kind in ("order", "match"):  # 3.0.0 (D1): the safety gates (safety_gate.py)
+            problems += safety_problems(kind, text if kind == "order" else files[1].read_text(encoding="utf-8-sig"),
+                                        files[-1], pathlib.Path(a.repo or "."), a.config, log_text, a.dispatch_log,
+                                        candidate, notes)
+        if text is not None and kind == "match":  # 3.0.0 B4: PROTECTED_CHANGED against git
+            problems += protected_report_problems(text, files[1].read_text(encoding="utf-8-sig"), files[-1],
+                                                  pathlib.Path(a.repo or "."), a.config, candidate, notes)
         if brief and text is not None and kind in ("order", "match"):
             brief_notes(text if kind == "order" else files[1].read_text(encoding="utf-8-sig"), files[-1], brief, notes)
         failed += bool(problems)
@@ -2759,107 +2845,6 @@ def main():
         print(f"checked {len(jobs) - skipped - undated}, {'warned' if a.warn else 'failed'} {failed}, skipped {skipped}"
               + (f", UNDATED {undated} (not checked)" if undated else ""))
     return 1 if (failed and not a.warn) or late_failed else 0
-
-
-EFFORT_LINE = re.compile(LOG_DATE + r"EFFORT_ACTUAL[ \t]+(\S+)[ \t]+(.*)$")
-
-
-def effort_notes(order_text, ids, log_text, notes):
-    """2.2.4-ds.4 (B8, WO-DS-006 #14, shadow): the order's MODEL / EFFORT against the `EFFORT_ACTUAL <WO> ...
-    effort=<e>` line `dsh_usage.py --effort-check` prints and the lead pastes into DIRECTOR_LOG at dispatch. The
-    trial's orders said high while every session ran at max; a mismatch is a shadow WARN, a missing line a note."""
-    line = re.search(r"^[ \t]*MODEL[ \t]*/[ \t]*EFFORT[ \t]*=[ \t]*[^/\n]*/\s*([A-Za-z]+)", order_text, re.M)
-    wanted = line.group(1).lower() if line else None
-    names = {name.upper() for name in ids}
-    found = [m.group(2) for m in (EFFORT_LINE.fullmatch(text) for text in log_lines(log_text))
-             if m and m.group(1).upper().removesuffix(".MD") in names]
-    label = next(iter(ids), "the order")
-    if not found:
-        notes.append(f"EFFORT_ACTUAL: no `EFFORT_ACTUAL {label} ... effort=<e>` line in the dispatch log; run "
-                     f"`dsh_usage.py --effort-check <order>` after dispatch and paste its line (docs/11)")
-        return
-    for rest in found:
-        actual = re.search(r"\beffort=(\S+)", rest)
-        if wanted and actual and actual.group(1).lower() != wanted:
-            notes.append(f"SHADOW WARN EFFORT: {label} says EFFORT {wanted}, the session ran at {actual.group(1)} "
-                         "(dispatch with reasoning_effort equal to the order, or fix the order)")
-
-
-PROTECTED_FIELD = re.compile(r"^[ \t]*PROTECTED_CHANGED[ \t]*[:：][ \t]*(.*)$", re.M)
-NONE_WORDS = ("NONE", "無", "没有", "沒有", "-")
-
-
-def scope_module():
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("scope_check", pathlib.Path(__file__).resolve().parent / "scope_check.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def protected_report_problems(report_text, order_text, order_path, repo, config, candidate, notes):
-    """2.2.4-ds.4 (B5, WO-DS-006 #7): the report's `PROTECTED_CHANGED:` line names each protected test file the work
-    changed (TESTS_LOCKED, director_work.json "protected_tests"), or NONE / 無. --match holds it against git: 無 while
-    a protected file changed FAILs (the trial's PO report said 「兩支原測試沒改一行」 and they had changed); a changed
-    file the line leaves out FAILs; existing content changed in a protected file FAILs (it may only grow)."""
-    scope = scope_module()
-    try:
-        summary = scope.protected_summary(repo, order_text, order_path, config.get("_protected_tests") or [],
-                                          candidate=candidate)
-    except (RuntimeError, OSError, ValueError) as error:
-        notes.append(f"PROTECTED_CHANGED: not compared with git ({error}); pass --repo (and --candidate)")
-        return []
-    if summary is None:
-        return []
-    changed, broken = summary
-    problems = [f"PROTECTED: {path}: {why}" for path, why in broken]
-    m = PROTECTED_FIELD.search(report_text)
-    if not m:
-        notes.append("PROTECTED_CHANGED: missing in the report; write each protected test file the work changed "
-                     "(scope_check.py prints the line), or NONE" + (f"; git shows: {', '.join(changed)}" if changed else ""))
-        return problems
-    value = re.split(r"\s+#", m.group(1))[0].strip()
-    listed = [] if value.strip("`").strip() in NONE_WORDS or value.upper().startswith("NONE") else \
-        [item.strip().strip("`").replace("\\", "/") for item in re.split(r"[,，、;；\s]+", value) if item.strip().strip("`")]
-    if not listed and changed:
-        problems.append(f"PROTECTED_CHANGED: the report says {value or 'nothing'}, but git shows protected test files "
-                        f"changed: {', '.join(changed)}")
-    else:
-        left_out = [path for path in changed if path not in listed]
-        if left_out:
-            problems.append(f"PROTECTED_CHANGED: changed protected test files the report leaves out: {', '.join(left_out)}")
-        extra = [path for path in listed if path not in changed]
-        if extra:
-            notes.append(f"PROTECTED_CHANGED: the report lists files git shows unchanged: {', '.join(extra)}")
-    return problems
-
-
-def revision_sync_notes(order_text, order_path, notes):
-    """2.2.3-ds.3 (WO-DS-004 lesson L-050, shadow): an order at REVISION 2 or later. One note to sync BRIEF.md,
-    WORK_DIR/tasks.md and WORK_DIR/RESUME_STATE.md with the new revision, and `shadow: REVISION_SYNC` for each of
-    those WORK_DIR files that was last written before the order (its modification time is older): it still describes
-    the old revision (the trial's tasks.md kept a corrected expected value). Never a problem; only reads."""
-    m = re.search(r"^\s*REVISION\s*[=:：]\s*(\d+)", order_text, re.M)
-    if not m or int(m.group(1)) < 2:
-        return
-    rev = int(m.group(1))
-    notes.append(f"REVISION {rev}: sync BRIEF.md, WORK_DIR/tasks.md and WORK_DIR/RESUME_STATE.md with this revision "
-                 "and tell the worker the new hash (docs/02)")
-    w = re.search(r"^\s*WORK_DIR\s*[=:：]\s*(.+?)\s*(?:#.*)?$", order_text, re.M)
-    if not w or w.group(1).startswith("<"):
-        return
-    work = pathlib.Path(w.group(1).strip().strip("`"))
-    if not work.is_absolute():
-        work = (pathlib.Path(order_path).resolve().parent / work) if not work.exists() else work
-    try:
-        written = pathlib.Path(order_path).stat().st_mtime
-    except OSError:
-        return
-    for name in ("tasks.md", "RESUME_STATE.md"):
-        path = work / name
-        if path.is_file() and path.stat().st_mtime < written:
-            notes.append(f"shadow: REVISION_SYNC {path} was last written before REVISION {rev} of the order; "
-                         "update it to the new revision (or confirm nothing in it changed)")
 
 
 def not_utf8(error, argv=None):

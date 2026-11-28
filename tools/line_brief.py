@@ -24,6 +24,7 @@ part is missing; 2 when the config cannot be read. Only reads (git status and gi
 """
 import argparse
 import datetime
+import importlib.util
 import json
 import pathlib
 import re
@@ -40,12 +41,11 @@ def age(path):
 
 
 def tail(path, count):
-    with open(path, "rb") as fh:
-        fh.seek(0, 2)
-        size = fh.tell()
-        fh.seek(max(0, size - 65536))
-        data = fh.read().decode("utf-8", errors="replace")
-    return data.splitlines()[-count:]
+    # 3.0.0 G1: the shared one-read tail (64 KiB; a cut first line is dropped, --log-lines 0 shows none)
+    spec = importlib.util.spec_from_file_location("dw_common", pathlib.Path(__file__).with_name("_common.py"))
+    common = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(common)
+    return common.tail_lines(path, count)
 
 
 def line_settings(a):
